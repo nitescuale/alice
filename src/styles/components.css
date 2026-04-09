@@ -1,0 +1,458 @@
+/* ============================================================
+   ALICE Component Styles
+   ============================================================ */
+
+/* ── Button ────────────────────────────────────────── */
+.alice-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  font-family: var(--font-body);
+  font-weight: 500;
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+  white-space: nowrap;
+  line-height: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+.alice-btn::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(255,255,255,0.06) 0%, transparent 100%);
+  pointer-events: none;
+}
+
+.alice-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.alice-btn--sm {
+  font-size: var(--text-xs);
+  padding: 0.375rem 0.75rem;
+  border-radius: var(--radius-sm);
+}
+
+.alice-btn--md {
+  font-size: var(--text-sm);
+  padding: 0.5rem 1rem;
+}
+
+.alice-btn--lg {
+  font-size: var(--text-base);
+  padding: 0.65rem 1.4rem;
+}
+
+.alice-btn--primary {
+  background: linear-gradient(135deg, var(--amber-500), #c48a30);
+  color: var(--noir-950);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3), 0 0 0 1px rgba(212,160,74,0.15);
+}
+
+.alice-btn--primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, var(--amber-400), var(--amber-500));
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4), var(--shadow-glow);
+  transform: translateY(-1px);
+}
+
+.alice-btn--primary:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: var(--shadow-sm);
+}
+
+.alice-btn--secondary {
+  background: var(--noir-700);
+  color: var(--noir-100);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.04);
+  border: 1px solid var(--noir-600);
+}
+
+.alice-btn--secondary:hover:not(:disabled) {
+  background: var(--noir-600);
+  color: var(--noir-50);
+  border-color: var(--noir-500);
+  transform: translateY(-1px);
+}
+
+.alice-btn--ghost {
+  background: transparent;
+  color: var(--noir-200);
+}
+
+.alice-btn--ghost::after {
+  display: none;
+}
+
+.alice-btn--ghost:hover:not(:disabled) {
+  background: var(--noir-700);
+  color: var(--noir-50);
+}
+
+.alice-btn--danger {
+  background: var(--danger-500);
+  color: #fff;
+}
+
+.alice-btn--danger:hover:not(:disabled) {
+  background: #ef4444;
+  transform: translateY(-1px);
+}
+
+.alice-btn__icon {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.alice-btn__spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid transparent;
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Utility: apply spin animation directly to any element */
+.spin {
+  animation: spin 0.8s linear infinite;
+}
+
+/* ── Card ──────────────────────────────────────────── */
+.alice-card {
+  border-radius: var(--radius-lg);
+  transition: all var(--duration-normal) var(--ease-out);
+}
+
+.alice-card--default {
+  background: var(--noir-800);
+  border: var(--border-subtle);
+}
+
+.alice-card--outlined {
+  background: transparent;
+  border: var(--border-medium);
+}
+
+.alice-card--elevated {
+  background: var(--noir-800);
+  border: var(--border-subtle);
+  box-shadow: var(--shadow-md);
+}
+
+.alice-card--amber {
+  background: linear-gradient(135deg, rgba(212,160,74,0.06), rgba(212,160,74,0.02));
+  border: 1px solid rgba(212,160,74,0.15);
+}
+
+.alice-card--pad-sm { padding: var(--sp-3); }
+.alice-card--pad-md { padding: var(--sp-5); }
+.alice-card--pad-lg { padding: var(--sp-8); }
+
+.alice-card__header {
+  margin-bottom: var(--sp-4);
+  padding-bottom: var(--sp-3);
+  border-bottom: var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.alice-card__body {
+  /* no default styles */
+}
+
+/* ── Input ─────────────────────────────────────────── */
+.alice-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.alice-input-group__label {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--noir-200);
+  letter-spacing: 0.01em;
+}
+
+.alice-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.alice-input-wrapper__icon {
+  position: absolute;
+  left: var(--sp-3);
+  display: flex;
+  align-items: center;
+  color: var(--noir-400);
+  pointer-events: none;
+}
+
+.alice-input,
+.alice-select,
+textarea.alice-textarea {
+  width: 100%;
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  color: var(--noir-50);
+  background: var(--noir-850);
+  border: 1px solid var(--noir-600);
+  border-radius: var(--radius-md);
+  padding: 0.55rem 0.75rem;
+  transition: all var(--duration-fast) var(--ease-out);
+  outline: none;
+}
+
+.alice-input--has-icon,
+.alice-select--has-icon {
+  padding-left: 2.5rem;
+}
+
+.alice-input:hover,
+.alice-select:hover,
+textarea.alice-textarea:hover {
+  border-color: var(--noir-500);
+}
+
+.alice-input:focus,
+.alice-select:focus,
+textarea.alice-textarea:focus {
+  border-color: var(--amber-500);
+  box-shadow: 0 0 0 3px var(--amber-glow);
+}
+
+.alice-input-group--error .alice-input,
+.alice-input-group--error textarea.alice-textarea {
+  border-color: var(--danger-500);
+}
+
+.alice-input-group__hint {
+  font-size: var(--text-xs);
+  color: var(--noir-400);
+}
+
+.alice-input-group__error {
+  font-size: var(--text-xs);
+  color: var(--danger-400);
+}
+
+textarea.alice-textarea {
+  min-height: 100px;
+  resize: vertical;
+  line-height: var(--leading-normal);
+}
+
+.alice-select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b6f7a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  padding-right: 2rem;
+  cursor: pointer;
+}
+
+/* ── Badge ─────────────────────────────────────────── */
+.alice-badge {
+  display: inline-flex;
+  align-items: center;
+  font-weight: 500;
+  border-radius: var(--radius-full);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.alice-badge--sm {
+  font-size: var(--text-xs);
+  padding: 0.15rem 0.55rem;
+}
+
+.alice-badge--md {
+  font-size: var(--text-sm);
+  padding: 0.25rem 0.7rem;
+}
+
+.alice-badge--default {
+  background: var(--noir-700);
+  color: var(--noir-200);
+}
+
+.alice-badge--amber {
+  background: var(--amber-glow-strong);
+  color: var(--amber-300);
+}
+
+.alice-badge--success {
+  background: var(--success-bg);
+  color: var(--success-500);
+  border: 1px solid rgba(74, 222, 128, 0.15);
+}
+
+.alice-badge--danger {
+  background: var(--danger-bg);
+  color: var(--danger-500);
+  border: 1px solid rgba(248, 113, 113, 0.15);
+}
+
+.alice-badge--info {
+  background: var(--info-bg);
+  color: var(--info-500);
+  border: 1px solid rgba(96, 165, 250, 0.15);
+}
+
+/* ── Tabs ──────────────────────────────────────────── */
+.alice-tabs__list {
+  display: flex;
+  gap: var(--sp-1);
+  border-bottom: 1px solid var(--noir-700);
+  padding-bottom: 0;
+  margin-bottom: var(--sp-5);
+}
+
+.alice-tabs__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--noir-300);
+  background: transparent;
+  border: none;
+  padding: var(--sp-2) var(--sp-4);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.alice-tabs__trigger:hover {
+  color: var(--noir-100);
+}
+
+.alice-tabs__trigger--active {
+  color: var(--amber-400);
+  border-bottom-color: var(--amber-500);
+}
+
+.alice-tabs__icon {
+  display: flex;
+  align-items: center;
+}
+
+.alice-tabs__content {
+  animation: fadeIn var(--duration-fast) var(--ease-out);
+}
+
+/* ── Modal ─────────────────────────────────────────── */
+.alice-modal {
+  border: none;
+  background: transparent;
+  padding: 0;
+  max-width: 100vw;
+  max-height: 100vh;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.alice-modal::backdrop {
+  background: rgba(8, 9, 11, 0.75);
+  backdrop-filter: blur(4px);
+}
+
+.alice-modal__content {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--noir-800);
+  border: var(--border-subtle);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  min-width: 400px;
+  max-width: 600px;
+  width: 90vw;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
+.alice-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-5) var(--sp-6);
+  border-bottom: var(--border-subtle);
+}
+
+.alice-modal__title {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  margin: 0;
+}
+
+.alice-modal__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  background: transparent;
+  border: none;
+  color: var(--noir-300);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.alice-modal__close:hover {
+  background: var(--noir-700);
+  color: var(--noir-100);
+}
+
+.alice-modal__body {
+  padding: var(--sp-6);
+}
+
+/* ── Progress ring ─────────────────────────────────── */
+.progress-ring {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.progress-ring__svg {
+  transform: rotate(-90deg);
+}
+
+.progress-ring__track {
+  fill: none;
+  stroke: var(--noir-700);
+}
+
+.progress-ring__fill {
+  fill: none;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.6s var(--ease-out);
+}
+
+.progress-ring__label {
+  position: absolute;
+  font-family: var(--font-display);
+  font-weight: 700;
+  color: var(--noir-50);
+}

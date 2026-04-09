@@ -1,28 +1,56 @@
 import { useCallback, useEffect, useState } from "react";
 import Markdown from "react-markdown";
+import {
+  ChevronRight,
+  BookOpen,
+  Folder,
+  FileText,
+  Send,
+  AlertCircle,
+  RefreshCw,
+  Bot,
+  User,
+  ChevronLeft,
+} from "lucide-react";
 import { api } from "../api";
+import { Card } from "../components/Card";
+import { Button } from "../components/Button";
+import { Badge } from "../components/Badge";
 
 type Chapter = { id: string; title: string; path?: string };
 type Course = { id: string; title: string; chapters: Chapter[] };
 type Subject = { id: string; title: string; courses: Course[] };
 
+interface ChatMessage {
+  role: "user" | "ai";
+  text: string;
+}
+
 export function Courses() {
   const [tax, setTax] = useState<{ subjects: Subject[] } | null>(null);
+  const [openSubjects, setOpenSubjects] = useState<Set<string>>(new Set());
   const [sel, setSel] = useState<{
     subjectId: string;
     courseId: string;
     chapterId: string;
   } | null>(null);
-  const [content, setContent] = useState<{ markdown: string; files: { path: string }[] } | null>(null);
+  const [content, setContent] = useState<{
+    markdown: string;
+    files: { path: string }[];
+  } | null>(null);
   const [assistQ, setAssistQ] = useState("");
-  const [assistA, setAssistA] = useState("");
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const [indexMsg, setIndexMsg] = useState("");
   const [err, setErr] = useState("");
 
   useEffect(() => {
     api<{ subjects: Subject[] }>("/api/taxonomy")
-      .then(setTax)
+      .then((t) => {
+        setTax(t);
+        // Open all subjects by default
+        setOpenSubjects(new Set(t.subjects.map((s) => s.id)));
+      })
       .catch((e: Error) => setErr(String(e.message)));
   }, []);
 
@@ -31,16 +59,24 @@ export function Courses() {
       setSel({ subjectId, courseId, chapterId });
       setErr("");
       setLoading(true);
+      setChatHistory([]);
       try {
         const c = await api<{ markdown: string; files: { path: string }[] }>(
           "/api/chapter/content",
           {
             method: "POST",
-            body: JSON.stringify({ subject_id: subjectId, course_id: courseId, chapter_id: chapterId }),
-          },
+            body: JSON.stringify({
+              subject_id: subjectId,
+              course_id: courseId,
+              chapter_id: chapterId,
+            }),
+          }
         );
         setContent(c);
-        await api("/api/progress/chapter/" + encodeURIComponent(chapterId), { method: "POST" });
+        await api(
+          "/api/progress/chapter/" + encodeURIComponent(chapterId),
+          { method: "POST" }
+        );
       } catch (e) {
         setErr(String(e));
         setContent(null);
@@ -48,24 +84,54 @@ export function Courses() {
         setLoading(false);
       }
     },
-    [],
+    []
   );
+
+  function toggleSubject(id: string) {
+    setOpenSubjects((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  // Find prev/next chapter
+  function getAdjacentChapters() {
+    if (!tax || !sel) return { prev: null, next: null };
+    const allChapters: { subjectId: string; courseId: string; chapter: Chapter }[] = [];
+    for (const s of tax.subjects) {
+      for (const c of s.courses) {
+        for (const ch of c.chapters) {
+          allChapters.push({ subjectId: s.id, courseId: c.id, chapter: ch });
+        }
+      }
+    }
+    const idx = allChapters.findIndex((c) => c.chapter.id === sel.chapterId);
+    return {
+      prev: idx > 0 ? allChapters[idx - 1] : null,
+      next: idx < allChapters.length - 1 ? allChapters[idx + 1] : null,
+    };
+  }
 
   async function runAssist() {
     if (!sel || !assistQ.trim()) return;
+    const question = assistQ.trim();
+    setAssistQ("");
+    setChatHistory((prev) => [...prev, { role: "user", text: question }]);
     setErr("");
     setLoading(true);
     try {
       const r = await api<{ answer: string }>("/api/assist", {
         method: "POST",
         body: JSON.stringify({
-          question: assistQ,
+          question,
           subject_id: sel.subjectId,
           course_id: sel.courseId,
           chapter_id: sel.chapterId,
         }),
       });
-      setAssistA(r.answer);
+      setChatHistory((prev) => [...prev, { role: "ai", text: r.answer }]);
     } catch (e) {
       setErr(String(e));
     } finally {
@@ -87,93 +153,243 @@ export function Courses() {
     }
   }
 
+  const { prev, next } = getAdjacentChapters();
+
   return (
     <div>
-      <h1>Cours</h1>
-      <p className="muted">
-        Navigation par matière → cours → chapitre. Le RAG alimente l’assistant (pas de repérage « où c’est dit » dans l’UI).
-      </p>
-      {err && <p className="error">{err}</p>}
+      <div className="page-header">
+        <h1 className="page-header__title">Cours</h1>
+        <p className="page-header__subtitle">
+          Parcourez vos matieres, cours et chapitres. L'assistant RAG peut
+          repondre a vos questions sur le contenu.
+        </p>
+      </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: "1.5rem", marginTop: "1rem" }}>
-        <div>
-          <h2>Arborescence</h2>
-          {!tax && <p className="muted">Chargement…</p>}
-          <ul className="tree">
-            {tax?.subjects.map((s) => (
-              <li key={s.id}>
-                <strong>{s.title}</strong>
-                <ul className="tree">
-                  {s.courses.map((c) => (
-                    <li key={c.id}>
-                      {c.title}
-                      <ul className="tree">
-                        {c.chapters.map((ch) => (
-                          <li key={ch.id}>
-                            <button
-                              type="button"
-                              className={
-                                "link" +
-                                (sel?.chapterId === ch.id ? " active" : "")
-                              }
-                              onClick={() => loadChapter(s.id, c.id, ch.id)}
-                            >
-                              {ch.title}
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    </li>
-                  ))}
-                </ul>
-              </li>
-            ))}
-          </ul>
-          <p style={{ marginTop: "1rem" }}>
-            <button type="button" className="secondary" onClick={rebuildIndex}>
-              Réindexer RAG
-            </button>
-          </p>
-          {indexMsg && (
-            <pre style={{ fontSize: "0.75rem", marginTop: "0.5rem", whiteSpace: "pre-wrap" }}>
-              {indexMsg}
-            </pre>
-          )}
+      {err && (
+        <div className="error-banner">
+          <span className="error-banner__icon">
+            <AlertCircle size={16} />
+          </span>
+          {err}
         </div>
+      )}
 
-        <div>
-          <h2>Contenu</h2>
-          {loading && <p className="muted">Chargement…</p>}
-          {content && (
-            <>
-              <p className="muted">
-                Fichiers : {content.files.map((f) => f.path).join(", ") || "—"}
-              </p>
-              <div className="md">
-                <Markdown>{content.markdown}</Markdown>
-              </div>
-            </>
+      <div className="courses-layout">
+        {/* Tree navigation */}
+        <Card variant="default" padding="sm" className="courses-tree">
+          <div style={{ padding: "var(--sp-3) var(--sp-3) var(--sp-2)" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "var(--sp-3)" }}>
+              <span style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--noir-300)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                Arborescence
+              </span>
+              <Button variant="ghost" size="sm" icon={<RefreshCw size={12} />} onClick={rebuildIndex}>
+                RAG
+              </Button>
+            </div>
+            {indexMsg && (
+              <pre style={{ fontSize: "0.7rem", whiteSpace: "pre-wrap", color: "var(--noir-400)", marginBottom: "var(--sp-3)" }}>
+                {indexMsg}
+              </pre>
+            )}
+          </div>
+
+          {!tax && (
+            <div style={{ padding: "var(--sp-4)" }}>
+              <div className="skeleton skeleton--text" />
+              <div className="skeleton skeleton--text" style={{ width: "60%" }} />
+              <div className="skeleton skeleton--text" style={{ width: "70%" }} />
+            </div>
           )}
 
-          {sel && (
-            <>
-              <h2>Assistant (RAG + Ollama)</h2>
-              <textarea
-                value={assistQ}
-                onChange={(e) => setAssistQ(e.target.value)}
-                placeholder="Pose une question sur ce chapitre…"
-              />
-              <p style={{ marginTop: "0.5rem" }}>
-                <button type="button" disabled={loading} onClick={runAssist}>
-                  Demander
-                </button>
+          {tax?.subjects.map((s) => (
+            <div key={s.id} className="tree-section">
+              <button
+                type="button"
+                className="tree-subject"
+                onClick={() => toggleSubject(s.id)}
+              >
+                <span
+                  className={`tree-subject__icon ${openSubjects.has(s.id) ? "tree-subject__icon--open" : ""}`}
+                >
+                  <ChevronRight size={14} />
+                </span>
+                <BookOpen size={14} />
+                {s.title}
+              </button>
+
+              {openSubjects.has(s.id) &&
+                s.courses.map((c) => (
+                  <div key={c.id}>
+                    <div className="tree-course">
+                      <div className="tree-course__label">
+                        <Folder size={12} />
+                        {c.title}
+                      </div>
+                    </div>
+                    {c.chapters.map((ch) => (
+                      <div key={ch.id} className="tree-chapter">
+                        <button
+                          type="button"
+                          className={`tree-chapter__btn ${sel?.chapterId === ch.id ? "tree-chapter__btn--active" : ""}`}
+                          onClick={() => loadChapter(s.id, c.id, ch.id)}
+                        >
+                          <span className="tree-chapter__dot" />
+                          <FileText size={12} style={{ flexShrink: 0, opacity: 0.5 }} />
+                          {ch.title}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+            </div>
+          ))}
+        </Card>
+
+        {/* Content area */}
+        <div className="courses-content">
+          {loading && !content && (
+            <Card variant="default" padding="lg">
+              <div className="skeleton skeleton--heading" />
+              <div className="skeleton skeleton--text" />
+              <div className="skeleton skeleton--text" style={{ width: "90%" }} />
+              <div className="skeleton skeleton--text" style={{ width: "75%" }} />
+              <div className="skeleton skeleton--block" style={{ marginTop: "var(--sp-4)" }} />
+            </Card>
+          )}
+
+          {!content && !loading && (
+            <Card variant="outlined" padding="lg" style={{ textAlign: "center", color: "var(--noir-400)" }}>
+              <BookOpen size={40} style={{ opacity: 0.2, marginBottom: "var(--sp-4)" }} />
+              <p style={{ fontSize: "var(--text-md)", fontWeight: 500, color: "var(--noir-300)" }}>
+                Selectionnez un chapitre
               </p>
-              {assistA && (
-                <div className="md" style={{ marginTop: "1rem" }}>
-                  <Markdown>{assistA}</Markdown>
+              <p style={{ fontSize: "var(--text-sm)" }}>
+                Choisissez un chapitre dans l'arborescence pour afficher son contenu.
+              </p>
+            </Card>
+          )}
+
+          {content && (
+            <div className="animate-fade-in">
+              {content.files.length > 0 && (
+                <div style={{ marginBottom: "var(--sp-4)", display: "flex", gap: "var(--sp-2)", flexWrap: "wrap" }}>
+                  {content.files.map((f) => (
+                    <Badge key={f.path} variant="default" size="sm">
+                      <FileText size={10} style={{ marginRight: 4 }} />
+                      {f.path.split("/").pop() || f.path}
+                    </Badge>
+                  ))}
                 </div>
               )}
-            </>
+
+              <Card variant="default" padding="lg">
+                <div className="md-content">
+                  <Markdown>{content.markdown}</Markdown>
+                </div>
+              </Card>
+
+              {/* Prev / Next navigation */}
+              <div className="courses-content__nav">
+                {prev ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon={<ChevronLeft size={14} />}
+                    onClick={() =>
+                      loadChapter(prev.subjectId, prev.courseId, prev.chapter.id)
+                    }
+                  >
+                    {prev.chapter.title}
+                  </Button>
+                ) : (
+                  <span />
+                )}
+                {next ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() =>
+                      loadChapter(next.subjectId, next.courseId, next.chapter.id)
+                    }
+                  >
+                    {next.chapter.title}
+                    <ChevronRight size={14} />
+                  </Button>
+                ) : (
+                  <span />
+                )}
+              </div>
+
+              {/* Assistant chat */}
+              {sel && (
+                <div className="assistant-section">
+                  <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)", marginBottom: "var(--sp-4)" }}>
+                    <Bot size={18} style={{ color: "var(--amber-400)" }} />
+                    <h3 style={{ fontSize: "var(--text-lg)", margin: 0 }}>
+                      Assistant RAG
+                    </h3>
+                    <Badge variant="amber" size="sm">Ollama</Badge>
+                  </div>
+
+                  {chatHistory.length > 0 && (
+                    <div className="assistant-messages">
+                      {chatHistory.map((msg, i) => (
+                        <div
+                          key={i}
+                          className={`assistant-msg ${msg.role === "user" ? "assistant-msg--user" : "assistant-msg--ai"}`}
+                        >
+                          <div
+                            className={`assistant-msg__avatar ${msg.role === "user" ? "assistant-msg__avatar--user" : "assistant-msg__avatar--ai"}`}
+                          >
+                            {msg.role === "user" ? (
+                              <User size={14} />
+                            ) : (
+                              <Bot size={14} />
+                            )}
+                          </div>
+                          <div className="assistant-msg__bubble">
+                            {msg.role === "ai" ? (
+                              <div className="md-content">
+                                <Markdown>{msg.text}</Markdown>
+                              </div>
+                            ) : (
+                              msg.text
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="assistant-input-row">
+                    <textarea
+                      className="alice-textarea"
+                      value={assistQ}
+                      onChange={(e) => setAssistQ(e.target.value)}
+                      placeholder="Posez une question sur ce chapitre..."
+                      rows={2}
+                      style={{ minHeight: "60px" }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          runAssist();
+                        }
+                      }}
+                    />
+                    <Button
+                      variant="primary"
+                      size="md"
+                      icon={<Send size={14} />}
+                      disabled={loading || !assistQ.trim()}
+                      loading={loading}
+                      onClick={runAssist}
+                    >
+                      Envoyer
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
           )}
         </div>
       </div>

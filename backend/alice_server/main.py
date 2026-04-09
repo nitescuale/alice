@@ -20,6 +20,7 @@ from alice_server.config import (
     set_ollama_runtime,
 )
 from alice_server.extract import extract_file
+from alice_server import github_import
 
 app = FastAPI(title="ALICE Backend", version="0.1.0")
 
@@ -171,16 +172,51 @@ Réponds en français de façon claire et structurée. Base-toi sur le contexte;
     return {"answer": text}
 
 
+_BATCH_SIZE = 10  # questions per LLM call
+
+
+def _parse_questions(raw: str) -> list[dict[str, Any]]:
+    """Extract questions list from a raw LLM response (may be wrapped in markdown)."""
+    raw = raw.strip()
+    # Strip markdown code fences if present
+    if "```" in raw:
+        parts = raw.split("```")
+        # pick the first non-empty block after the opening fence
+        for part in parts[1:]:
+            part = part.strip()
+            if part.startswith("json"):
+                part = part[4:].strip()
+            if part:
+                raw = part
+                break
+    try:
+        data = json.loads(raw)
+        qs = data.get("questions", [])
+        if isinstance(qs, list):
+            return qs
+    except json.JSONDecodeError:
+        pass
+    return []
+
+
 class QuizGenBody(BaseModel):
     chapter_id: str
     course_id: str
     subject_id: str
-    num_questions: int = 5
+    num_questions: int = 10
 
 
 @app.post("/api/quiz/generate")
 async def quiz_generate(body: QuizGenBody) -> dict[str, Any]:
-    """Génère un QCM via RAG + Ollama (JSON)."""
+    """Génère un QCM via RAG + Ollama en batches de 10 questions max.
+
+    Strategy A: sequential batching server-side.
+    The backend makes ceil(num_questions / BATCH_SIZE) sequential Ollama calls,
+    concatenates the results, and returns a single JSON response.
+    The frontend just shows a loading indicator.
+    """
+    num = max(1, min(body.num_questions, 50))  # cap at 50
+
     rq = rag.query_courses(
         f"notions importantes cours chapitre {body.chapter_id}",
         n_results=12,
@@ -189,24 +225,43 @@ async def quiz_generate(body: QuizGenBody) -> dict[str, Any]:
         subject_id=body.subject_id,
     )
     ctx = ollama.format_rag_context(rq)
-    prompt = f"""Contexte pédagogique :
-{ctx}
 
-Génère exactement {body.num_questions} questions à choix multiples (4 propositions, une seule bonne).
+    all_questions: list[dict[str, Any]] = []
+    remaining = num
+
+    while remaining > 0:
+        batch_n = min(remaining, _BATCH_SIZE)
+        # Build a seed of already-generated question texts so the model avoids
+        # duplicates across batches.
+        already = ""
+        if all_questions:
+            prev_texts = "\n".join(f"- {q['q']}" for q in all_questions[:20])
+            already = f"\nQuestions déjà générées (ne pas répéter) :\n{prev_texts}\n"
+
+        prompt = f"""Contexte pédagogique :
+{ctx}
+{already}
+Génère exactement {batch_n} questions à choix multiples (4 propositions, une seule bonne).
 Réponds UNIQUEMENT avec un JSON valide de ce schéma :
 {{"questions":[{{"q":"...","options":["a","b","c","d"],"correct":0}}]}}
 correct est l'index 0-3 de la bonne réponse. Questions en français."""
-    raw = await ollama.generate(prompt, system="Tu écris du JSON strict sans markdown.", temperature=0.3)
-    raw = raw.strip()
-    if "```" in raw:
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        data = {"questions": [], "raw": raw}
-    return data
+
+        raw = await ollama.generate(
+            prompt,
+            system="Tu écris du JSON strict sans markdown.",
+            temperature=0.4,
+        )
+        batch = _parse_questions(raw)
+        if batch:
+            all_questions.extend(batch[:batch_n])
+        else:
+            # If the LLM failed to produce valid JSON, stop batching
+            if not all_questions:
+                return {"questions": [], "raw": raw}
+            break
+        remaining -= batch_n
+
+    return {"questions": all_questions}
 
 
 class QuizGradeBody(BaseModel):
@@ -308,6 +363,11 @@ def progress_quiz(chapter_id: str | None = None) -> list[dict[str, Any]]:
     return store.quiz_history(chapter_id)
 
 
+@app.get("/api/progress/chapters")
+def progress_chapters() -> list[dict[str, Any]]:
+    return store.chapter_history()
+
+
 @app.post("/api/progress/chapter/{chapter_id}")
 def progress_chapter(chapter_id: str) -> dict[str, str]:
     store.touch_chapter(chapter_id)
@@ -337,3 +397,94 @@ def settings_get() -> dict[str, str]:
 def settings_post(body: SettingsBody) -> dict[str, str]:
     set_ollama_runtime(host=body.ollama_host, model=body.ollama_model)
     return {"ollama_host": get_ollama_host(), "ollama_model": get_ollama_model()}
+
+
+# ---------------------------------------------------------------------------
+# GitHub import
+# ---------------------------------------------------------------------------
+
+class GitHubImportBody(BaseModel):
+    url: str
+    token: str | None = None
+    max_files: int = 200
+    reindex: bool = True  # auto-index after import
+
+
+@app.post("/api/github/import")
+async def github_import_repo(body: GitHubImportBody) -> dict[str, Any]:
+    """Import a public GitHub repository into subjects/github/<owner>__<repo>/.
+
+    Downloads text/code files via the Git Trees API + raw.githubusercontent.com
+    (single tree call, no per-file rate limiting).  Optionally triggers a RAG
+    rebuild afterwards.
+    """
+    try:
+        result = await github_import.import_repo(
+            url=body.url,
+            token=body.token or None,
+            max_files=body.max_files,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if body.reindex and result.get("files_written", 0) > 0:
+        try:
+            idx = ingest.index_courses()
+            result["index"] = idx
+        except Exception as exc:  # noqa: BLE001
+            result["index_error"] = str(exc)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Interview chat  (stateless — client sends full history each turn)
+# ---------------------------------------------------------------------------
+
+class ChatMessage(BaseModel):
+    role: str   # "user" | "assistant"
+    content: str
+
+
+class InterviewChatBody(BaseModel):
+    messages: list[ChatMessage]
+    problem: str | None = None   # optional context injected into system prompt
+    company: str | None = None
+
+
+@app.post("/api/interview/chat")
+async def interview_chat(body: InterviewChatBody) -> dict[str, str]:
+    """Stateless interview chat.
+
+    The client owns the conversation history and sends it in full every turn.
+    The backend prepends a system prompt (with optional RAG context) and calls
+    Ollama /api/chat.
+    """
+    # Build RAG context from the problem description if provided
+    rag_ctx = ""
+    if body.problem and body.problem.strip():
+        iq = rag.query_interviews(
+            body.problem,
+            n_results=5,
+            company=body.company,
+        )
+        rag_ctx_raw = ollama.format_rag_context(iq)
+        if rag_ctx_raw.strip():
+            rag_ctx = f"\n\nRelevant reference problems:\n{rag_ctx_raw}"
+
+    system = (
+        "You are an experienced technical interviewer conducting a coding interview. "
+        "Your role is to guide the candidate through the problem without giving away "
+        "the solution directly. Ask clarifying questions, give hints when stuck, "
+        "push back on suboptimal approaches, and evaluate trade-offs. "
+        "Keep responses concise — 2-4 sentences unless a longer explanation is needed. "
+        "Respond in the same language the candidate uses."
+        f"{rag_ctx}"
+    )
+
+    history = [{"role": m.role, "content": m.content} for m in body.messages]
+
+    reply = await ollama.chat(messages=history, system=system, temperature=0.6)
+    return {"reply": reply}

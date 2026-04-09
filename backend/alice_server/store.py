@@ -81,3 +81,12 @@ def touch_chapter(chapter_id: str) -> None:
             """,
             (chapter_id, datetime.utcnow().isoformat()),
         )
+
+
+def chapter_history() -> list[dict[str, Any]]:
+    """Return all visited chapters ordered by most recently read."""
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT chapter_id, last_read_at AS completed_at, visits FROM chapter_progress ORDER BY last_read_at DESC LIMIT 200"
+        )
+        return [dict(r) for r in cur.fetchall()]

@@ -1,5 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
+import {
+  Brain,
+  AlertCircle,
+  Clock,
+  Trophy,
+  Sparkles,
+  CheckCircle2,
+  XCircle,
+  Loader2,
+} from "lucide-react";
 import { api } from "../api";
+import { Card } from "../components/Card";
+import { Button } from "../components/Button";
+import { Select } from "../components/Select";
+import { Badge } from "../components/Badge";
+import { ProgressRing } from "../components/ProgressRing";
 
 type Chapter = { id: string; title: string };
 type Course = { id: string; title: string; chapters: Chapter[] };
@@ -7,16 +22,31 @@ type Subject = { id: string; title: string; courses: Course[] };
 
 type QItem = { q: string; options: string[]; correct: number };
 
+const LETTERS = ["A", "B", "C", "D", "E", "F"];
+
+const NUM_QUESTION_OPTIONS = [
+  { value: "5", label: "5 questions" },
+  { value: "10", label: "10 questions" },
+  { value: "20", label: "20 questions" },
+  { value: "30", label: "30 questions" },
+];
+
 export function Quiz() {
   const [tax, setTax] = useState<{ subjects: Subject[] } | null>(null);
   const [subjectId, setSubjectId] = useState("");
   const [courseId, setCourseId] = useState("");
   const [chapterId, setChapterId] = useState("");
+  const [numQuestions, setNumQuestions] = useState("10");
   const [questions, setQuestions] = useState<QItem[]>([]);
   const [answers, setAnswers] = useState<Record<string, number>>({});
-  const [result, setResult] = useState<{ correct: number; total: number; score: number } | null>(null);
+  const [result, setResult] = useState<{
+    correct: number;
+    total: number;
+    score: number;
+  } | null>(null);
   const [history, setHistory] = useState<Record<string, unknown>[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMsg, setLoadingMsg] = useState("");
   const [err, setErr] = useState("");
 
   useEffect(() => {
@@ -51,30 +81,48 @@ export function Quiz() {
     return courses.find((c) => c.id === courseId)?.chapters ?? [];
   }, [courses, courseId]);
 
+  const answeredCount = Object.keys(answers).length;
+  const progress =
+    questions.length > 0 ? (answeredCount / questions.length) * 100 : 0;
+
   async function generate() {
     if (!chapterId || !courseId || !subjectId) return;
     setErr("");
     setLoading(true);
     setResult(null);
     setAnswers({});
+    setQuestions([]);
+
+    const n = parseInt(numQuestions, 10) || 10;
+    const batchCount = Math.ceil(n / 10);
+    if (batchCount > 1) {
+      setLoadingMsg(`Generation du quiz (${n} questions en ${batchCount} batches)...`);
+    } else {
+      setLoadingMsg("Generation du quiz...");
+    }
+
     try {
-      const data = await api<{ questions?: QItem[]; raw?: string }>("/api/quiz/generate", {
-        method: "POST",
-        body: JSON.stringify({
-          chapter_id: chapterId,
-          course_id: courseId,
-          subject_id: subjectId,
-          num_questions: 5,
-        }),
-      });
+      const data = await api<{ questions?: QItem[]; raw?: string }>(
+        "/api/quiz/generate",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            chapter_id: chapterId,
+            course_id: courseId,
+            subject_id: subjectId,
+            num_questions: n,
+          }),
+        }
+      );
       setQuestions(data.questions ?? []);
       if (!data.questions?.length && data.raw) {
-        setErr("Réponse LLM non JSON : vérifie Ollama / le modèle.");
+        setErr("Reponse LLM non JSON : verifiez Ollama / le modele.");
       }
     } catch (e) {
       setErr(String(e));
     } finally {
       setLoading(false);
+      setLoadingMsg("");
     }
   }
 
@@ -82,7 +130,11 @@ export function Quiz() {
     if (!chapterId) return;
     setErr("");
     try {
-      const r = await api<{ correct: number; total: number; score: number }>("/api/quiz/grade", {
+      const r = await api<{
+        correct: number;
+        total: number;
+        score: number;
+      }>("/api/quiz/grade", {
         method: "POST",
         body: JSON.stringify({
           chapter_id: chapterId,
@@ -96,71 +148,245 @@ export function Quiz() {
     }
   }
 
+  function getOptionClass(qIdx: number, optIdx: number) {
+    const base = "quiz-option";
+    if (!result) {
+      return answers[String(qIdx)] === optIdx
+        ? `${base} quiz-option--selected`
+        : base;
+    }
+    // After grading
+    const q = questions[qIdx];
+    if (optIdx === q.correct) return `${base} quiz-option--correct`;
+    if (answers[String(qIdx)] === optIdx && optIdx !== q.correct)
+      return `${base} quiz-option--wrong`;
+    return base;
+  }
+
   return (
     <div>
-      <h1>Quiz / QCM</h1>
-      <p className="muted">Génération via RAG + Ollama (contexte chapitre).</p>
-      {err && <p className="error">{err}</p>}
-
-      <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center", marginBottom: "1rem" }}>
-        <select value={subjectId} onChange={(e) => { setSubjectId(e.target.value); setCourseId(""); setChapterId(""); }}>
-          <option value="">Matière</option>
-          {tax?.subjects.map((s) => (
-            <option key={s.id} value={s.id}>{s.title}</option>
-          ))}
-        </select>
-        <select value={courseId} onChange={(e) => { setCourseId(e.target.value); setChapterId(""); }}>
-          <option value="">Cours</option>
-          {courses.map((c) => (
-            <option key={c.id} value={c.id}>{c.title}</option>
-          ))}
-        </select>
-        <select value={chapterId} onChange={(e) => setChapterId(e.target.value)}>
-          <option value="">Chapitre</option>
-          {chapters.map((ch) => (
-            <option key={ch.id} value={ch.id}>{ch.title}</option>
-          ))}
-        </select>
-        <button type="button" disabled={loading || !chapterId} onClick={generate}>
-          Générer QCM
-        </button>
+      <div className="page-header">
+        <h1 className="page-header__title">Quiz</h1>
+        <p className="page-header__subtitle">
+          Generation de QCM via RAG + Ollama. Choisissez un chapitre et testez
+          vos connaissances.
+        </p>
       </div>
 
+      {err && (
+        <div className="error-banner">
+          <span className="error-banner__icon">
+            <AlertCircle size={16} />
+          </span>
+          {err}
+        </div>
+      )}
+
+      {/* Selectors */}
+      <div className="quiz-selectors">
+        <Select
+          label="Matiere"
+          options={
+            tax?.subjects.map((s) => ({ value: s.id, label: s.title })) ?? []
+          }
+          placeholder="Matiere"
+          value={subjectId}
+          onChange={(e) => {
+            setSubjectId(e.target.value);
+            setCourseId("");
+            setChapterId("");
+          }}
+        />
+        <Select
+          label="Cours"
+          options={courses.map((c) => ({ value: c.id, label: c.title }))}
+          placeholder="Cours"
+          value={courseId}
+          onChange={(e) => {
+            setCourseId(e.target.value);
+            setChapterId("");
+          }}
+        />
+        <Select
+          label="Chapitre"
+          options={chapters.map((ch) => ({ value: ch.id, label: ch.title }))}
+          placeholder="Chapitre"
+          value={chapterId}
+          onChange={(e) => setChapterId(e.target.value)}
+        />
+        <Select
+          label="Nombre de questions"
+          options={NUM_QUESTION_OPTIONS}
+          value={numQuestions}
+          onChange={(e) => setNumQuestions(e.target.value)}
+        />
+        <div style={{ alignSelf: "flex-end" }}>
+          <Button
+            variant="primary"
+            icon={loading ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
+            disabled={loading || !chapterId}
+            loading={loading}
+            onClick={generate}
+          >
+            {loading ? "Generation..." : "Generer QCM"}
+          </Button>
+        </div>
+      </div>
+
+      {/* Loading indicator */}
+      {loading && (
+        <div className="quiz-loading animate-fade-in">
+          <Loader2 size={20} className="spin" style={{ color: "var(--amber-400)" }} />
+          <span className="quiz-loading__msg">{loadingMsg}</span>
+          <span className="quiz-loading__hint">
+            Le modele LLM genere les questions — cela peut prendre quelques instants.
+          </span>
+        </div>
+      )}
+
+      {/* Progress bar */}
+      {questions.length > 0 && !result && (
+        <div className="quiz-progress animate-fade-in">
+          <Brain size={16} style={{ color: "var(--amber-400)", flexShrink: 0 }} />
+          <div className="quiz-progress__bar">
+            <div
+              className="quiz-progress__fill"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+          <span className="quiz-progress__text">
+            {answeredCount} / {questions.length}
+          </span>
+        </div>
+      )}
+
+      {/* Score result */}
+      {result && (
+        <Card variant="amber" padding="none" className="quiz-score" style={{ marginBottom: "var(--sp-6)" }}>
+          <div className="quiz-score__ring">
+            <ProgressRing
+              value={result.score * 100}
+              size={110}
+              strokeWidth={10}
+              label={`${Math.round(result.score * 100)}%`}
+            />
+          </div>
+          <div className="quiz-score__details">
+            <h3>
+              {result.score >= 0.8
+                ? "Excellent !"
+                : result.score >= 0.5
+                  ? "Pas mal !"
+                  : "A retravailler"}
+            </h3>
+            <p>
+              {result.correct} bonne{result.correct > 1 ? "s" : ""} reponse
+              {result.correct > 1 ? "s" : ""} sur {result.total}
+            </p>
+            <div style={{ display: "flex", gap: "var(--sp-2)", marginTop: "var(--sp-3)" }}>
+              <Button variant="primary" size="sm" onClick={generate}>
+                Nouveau quiz
+              </Button>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* Questions */}
       {questions.map((q, i) => (
-        <fieldset key={i} style={{ border: "1px solid #2f3336", borderRadius: 8, padding: "0.75rem", marginBottom: "0.75rem" }}>
-          <legend style={{ padding: "0 0.35rem" }}>{i + 1}. {q.q}</legend>
+        <Card
+          key={i}
+          variant="default"
+          padding="md"
+          className="quiz-question"
+          style={{ animationDelay: `${i * 80}ms` }}
+        >
+          <div className="quiz-question__number">
+            Question {i + 1} sur {questions.length}
+          </div>
+          <div className="quiz-question__text">{q.q}</div>
           {q.options?.map((opt, j) => (
-            <label key={j} style={{ display: "block", margin: "0.25rem 0" }}>
-              <input
-                type="radio"
-                name={`q-${i}`}
-                checked={answers[String(i)] === j}
-                onChange={() => setAnswers((a) => ({ ...a, [String(i)]: j }))}
-              />{" "}
-              {opt}
-            </label>
+            <div
+              key={j}
+              className={getOptionClass(i, j)}
+              onClick={() => {
+                if (result) return;
+                setAnswers((a) => ({ ...a, [String(i)]: j }));
+              }}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (result) return;
+                if (e.key === "Enter" || e.key === " ") {
+                  setAnswers((a) => ({ ...a, [String(i)]: j }));
+                }
+              }}
+            >
+              {!result && <span className="quiz-option__radio" />}
+              {result && (
+                <span style={{ display: "flex", flexShrink: 0 }}>
+                  {j === q.correct ? (
+                    <CheckCircle2 size={18} style={{ color: "var(--success-500)" }} />
+                  ) : answers[String(i)] === j ? (
+                    <XCircle size={18} style={{ color: "var(--danger-500)" }} />
+                  ) : (
+                    <span className="quiz-option__radio" />
+                  )}
+                </span>
+              )}
+              <span className="quiz-option__letter">{LETTERS[j]}</span>
+              <span>{opt}</span>
+            </div>
           ))}
-        </fieldset>
+        </Card>
       ))}
 
-      {questions.length > 0 && (
-        <button type="button" onClick={grade}>Valider</button>
+      {/* Grade button */}
+      {questions.length > 0 && !result && (
+        <div style={{ display: "flex", justifyContent: "center", marginTop: "var(--sp-4)", marginBottom: "var(--sp-8)" }}>
+          <Button
+            variant="primary"
+            size="lg"
+            icon={<Trophy size={16} />}
+            disabled={answeredCount < questions.length}
+            onClick={grade}
+          >
+            Valider mes reponses
+          </Button>
+        </div>
       )}
 
-      {result && (
-        <p style={{ marginTop: "1rem" }}>
-          Score : {result.correct} / {result.total} ({(result.score * 100).toFixed(0)} %)
-        </p>
+      {/* History */}
+      {history.length > 0 && (
+        <div className="quiz-history">
+          <h2 style={{ marginBottom: "var(--sp-4)" }}>Historique</h2>
+          <Card variant="default" padding="sm">
+            {history.slice(0, 15).map((h, i) => (
+              <div key={i} className="quiz-history__item">
+                <Clock size={14} style={{ color: "var(--noir-400)", flexShrink: 0 }} />
+                <span className="quiz-history__chapter">
+                  {String(h.chapter_id)}
+                </span>
+                <Badge
+                  variant={
+                    Number(h.score) / Number(h.total) >= 0.8
+                      ? "success"
+                      : Number(h.score) / Number(h.total) >= 0.5
+                        ? "amber"
+                        : "danger"
+                  }
+                  size="sm"
+                >
+                  {String(h.score)}/{String(h.total)}
+                </Badge>
+                <span className="quiz-history__date">
+                  {String(h.created_at).slice(0, 16).replace("T", " ")}
+                </span>
+              </div>
+            ))}
+          </Card>
+        </div>
       )}
-
-      <h2 style={{ marginTop: "2rem" }}>Historique récent</h2>
-      <ul className="muted" style={{ fontSize: "0.85rem" }}>
-        {history.slice(0, 15).map((h, i) => (
-          <li key={i}>
-            {String(h.chapter_id)} — {String(h.score)}/{String(h.total)} — {String(h.created_at)}
-          </li>
-        ))}
-      </ul>
     </div>
   );
 }
