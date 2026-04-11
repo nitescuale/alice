@@ -22,6 +22,15 @@ type Subject = { id: string; title: string; courses: Course[] };
 
 type QItem = { q: string; options: string[]; correct: number };
 
+/* ---- Module-level state: survives component unmount/remount ---- */
+let _genPromise: Promise<{ questions?: QItem[]; raw?: string }> | null = null;
+let _genLoadingMsg = "";
+let _stash: {
+  questions: QItem[];
+  answers: Record<string, number>;
+  result: { correct: number; total: number; score: number } | null;
+} | null = null;
+
 const LETTERS = ["A", "B", "C", "D", "E", "F"];
 
 const NUM_QUESTION_OPTIONS = [
@@ -48,6 +57,42 @@ export function Quiz() {
   const [loading, setLoading] = useState(false);
   const [loadingMsg, setLoadingMsg] = useState("");
   const [err, setErr] = useState("");
+
+  /* Restore state from module-level stash or pick up pending generation */
+  useEffect(() => {
+    if (_genPromise) {
+      setLoading(true);
+      setLoadingMsg(_genLoadingMsg);
+      _genPromise
+        .then((data) => {
+          const qs = data.questions ?? [];
+          setQuestions(qs);
+          _stash = { questions: qs, answers: {}, result: null };
+          if (!qs.length && data.raw) {
+            setErr("Reponse LLM non JSON : verifiez Ollama / le modele.");
+          }
+        })
+        .catch((e) => setErr(String(e)))
+        .finally(() => {
+          _genPromise = null;
+          setLoading(false);
+          setLoadingMsg("");
+        });
+    } else if (_stash) {
+      setQuestions(_stash.questions);
+      setAnswers(_stash.answers);
+      setResult(_stash.result);
+    }
+  }, []);
+
+  /* Sync answers & result back to module-level stash */
+  useEffect(() => {
+    if (_stash) _stash.answers = answers;
+  }, [answers]);
+
+  useEffect(() => {
+    if (_stash) _stash.result = result;
+  }, [result]);
 
   useEffect(() => {
     api<{ subjects: Subject[] }>("/api/taxonomy")
@@ -101,26 +146,35 @@ export function Quiz() {
       setLoadingMsg("Generation du quiz...");
     }
 
+    const promise = api<{ questions?: QItem[]; raw?: string }>(
+      "/api/quiz/generate",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          chapter_id: chapterId,
+          course_id: courseId,
+          subject_id: subjectId,
+          num_questions: n,
+        }),
+      }
+    );
+    _genPromise = promise;
+    _genLoadingMsg = batchCount > 1
+      ? `Generation du quiz (${n} questions en ${batchCount} batches)...`
+      : "Generation du quiz...";
+
     try {
-      const data = await api<{ questions?: QItem[]; raw?: string }>(
-        "/api/quiz/generate",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            chapter_id: chapterId,
-            course_id: courseId,
-            subject_id: subjectId,
-            num_questions: n,
-          }),
-        }
-      );
-      setQuestions(data.questions ?? []);
-      if (!data.questions?.length && data.raw) {
+      const data = await promise;
+      const qs = data.questions ?? [];
+      setQuestions(qs);
+      _stash = { questions: qs, answers: {}, result: null };
+      if (!qs.length && data.raw) {
         setErr("Reponse LLM non JSON : verifiez Ollama / le modele.");
       }
     } catch (e) {
       setErr(String(e));
     } finally {
+      _genPromise = null;
       setLoading(false);
       setLoadingMsg("");
     }
