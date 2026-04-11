@@ -14,6 +14,7 @@ import {
   Bot,
   User,
   ChevronLeft,
+  Trash2,
 } from "lucide-react";
 import { api } from "../api";
 import { Card } from "../components/Card";
@@ -142,6 +143,28 @@ export function Courses() {
     }
   }
 
+  async function deleteCourse(subjectId: string, courseId: string, courseTitle: string) {
+    if (!confirm(`Supprimer le cours « ${courseTitle} » ? Cette action est irréversible.`)) return;
+    setErr("");
+    try {
+      await api("/api/courses/delete", {
+        method: "POST",
+        body: JSON.stringify({ subject_id: subjectId, course_id: courseId }),
+      });
+      // Refresh taxonomy
+      const t = await api<{ subjects: Subject[] }>("/api/taxonomy");
+      setTax(t);
+      setOpenSubjects(new Set(t.subjects.map((s) => s.id)));
+      // Clear content if we were viewing a chapter from the deleted course
+      if (sel?.subjectId === subjectId && sel?.courseId === courseId) {
+        setSel(null);
+        setContent(null);
+      }
+    } catch (e) {
+      setErr(String(e));
+    }
+  }
+
   async function rebuildIndex() {
     setIndexMsg("");
     setErr("");
@@ -230,6 +253,17 @@ export function Courses() {
                         <Folder size={12} />
                         {c.title}
                       </div>
+                      <button
+                        type="button"
+                        className="tree-course__delete"
+                        title="Supprimer ce cours"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteCourse(s.id, c.id, c.title);
+                        }}
+                      >
+                        <Trash2 size={12} />
+                      </button>
                     </div>
                     {c.chapters.map((ch) => (
                       <div key={ch.id} className="tree-chapter">

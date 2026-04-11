@@ -514,6 +514,66 @@ def _ensure_taxonomy_entry(
     )
 
 
+class DeleteCourseBody(BaseModel):
+    subject_id: str
+    course_id: str
+
+
+@app.post("/api/courses/delete")
+async def courses_delete(body: DeleteCourseBody) -> dict[str, Any]:
+    """Delete a course: remove files, update taxonomy, reindex RAG."""
+    import shutil
+
+    tax_path = SUBJECTS_ROOT / "taxonomy.yaml"
+    if not tax_path.exists():
+        raise HTTPException(404, "taxonomy.yaml not found")
+
+    tax = yaml.safe_load(tax_path.read_text(encoding="utf-8")) or {}
+    subjects: list[dict] = tax.get("subjects", [])
+
+    subj = next((s for s in subjects if s["id"] == body.subject_id), None)
+    if not subj:
+        raise HTTPException(404, f"Subject '{body.subject_id}' not found")
+
+    courses: list[dict] = subj.get("courses", [])
+    course = next((c for c in courses if c["id"] == body.course_id), None)
+    if not course:
+        raise HTTPException(404, f"Course '{body.course_id}' not found")
+
+    # Remove course files from disk
+    course_dir = SUBJECTS_ROOT / body.subject_id / body.course_id
+    if course_dir.exists():
+        shutil.rmtree(course_dir)
+
+    # Remove course from taxonomy
+    courses.remove(course)
+
+    # If subject has no more courses, remove it entirely
+    if not courses:
+        subjects.remove(subj)
+        subj_dir = SUBJECTS_ROOT / body.subject_id
+        if subj_dir.exists() and not any(subj_dir.iterdir()):
+            subj_dir.rmdir()
+
+    tax_path.write_text(
+        yaml.dump(tax, allow_unicode=True, default_flow_style=False, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    # Reindex RAG
+    result: dict[str, Any] = {
+        "deleted_subject": body.subject_id,
+        "deleted_course": body.course_id,
+    }
+    try:
+        idx = ingest.index_courses()
+        result["index"] = idx
+    except Exception as exc:  # noqa: BLE001
+        result["index_error"] = str(exc)
+
+    return result
+
+
 @app.post("/api/courses/upload")
 async def courses_upload(
     file: UploadFile,

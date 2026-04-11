@@ -58,6 +58,28 @@
 .tree-course {
   padding-left: var(--sp-6);
   margin-top: var(--sp-1);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.tree-course__delete {
+  background: none;
+  border: none;
+  color: var(--noir-500);
+  cursor: pointer;
+  padding: var(--sp-1);
+  border-radius: var(--radius-sm);
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.tree-course:hover .tree-course__delete {
+  opacity: 1;
+}
+
+.tree-course__delete:hover {
+  color: var(--danger-500);
 }
 
 .tree-course__label {
