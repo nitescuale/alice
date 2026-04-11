@@ -42,48 +42,45 @@ def index_courses() -> dict[str, Any]:
 
     for subj in tax.get("subjects", []):
         sid = subj["id"]
-        for course in subj.get("courses", []):
-            cid = course["id"]
-            for ch in course.get("chapters", []):
-                chid = ch["id"]
-                rel = ch.get("path", f"{sid}/{cid}/{chid}")
-                ch_dir = SUBJECTS_ROOT / rel
-                if not ch_dir.is_dir():
-                    continue
-                for fp in sorted(ch_dir.rglob("*")):
-                    if fp.is_file() and fp.suffix.lower() in (
-                        ".pdf",
-                        ".md",
-                        ".markdown",
-                        ".txt",
-                        ".ipynb",
-                        ".py",
-                    ):
-                        text = extract_file(fp)
-                        rel_path = str(fp.relative_to(SUBJECTS_ROOT))
-                        chunks = chunk_by_paragraphs(
-                            text,
-                            source_path=rel_path,
-                            chapter_id=chid,
-                            course_id=cid,
-                            subject_id=sid,
+        for ch in subj.get("chapters", []):
+            chid = ch["id"]
+            rel = ch.get("path", f"{sid}/{chid}")
+            ch_dir = SUBJECTS_ROOT / rel
+            if not ch_dir.is_dir():
+                continue
+            for fp in sorted(ch_dir.rglob("*")):
+                if fp.is_file() and fp.suffix.lower() in (
+                    ".pdf",
+                    ".md",
+                    ".markdown",
+                    ".txt",
+                    ".ipynb",
+                    ".py",
+                ):
+                    text = extract_file(fp)
+                    rel_path = str(fp.relative_to(SUBJECTS_ROOT))
+                    chunks = chunk_by_paragraphs(
+                        text,
+                        source_path=rel_path,
+                        chapter_id=chid,
+                        course_id="",
+                        subject_id=sid,
+                    )
+                    for c in chunks:
+                        ids.append(rag.new_id())
+                        documents.append(c.text)
+                        metadatas.append(
+                            {
+                                "source_path": c.source_path,
+                                "chapter_id": chid,
+                                "subject_id": sid,
+                                "offset_start": c.offset_start,
+                                "offset_end": c.offset_end,
+                                "file_sha256": file_hash(fp),
+                            }
                         )
-                        for c in chunks:
-                            ids.append(rag.new_id())
-                            documents.append(c.text)
-                            metadatas.append(
-                                {
-                                    "source_path": c.source_path,
-                                    "chapter_id": chid,
-                                    "course_id": cid,
-                                    "subject_id": sid,
-                                    "offset_start": c.offset_start,
-                                    "offset_end": c.offset_end,
-                                    "file_sha256": file_hash(fp),
-                                }
-                            )
-                        indexed_files += 1
-                        chunk_count += len(chunks)
+                    indexed_files += 1
+                    chunk_count += len(chunks)
 
     # Full rebuild: drop and recreate the collection
     client = rag.get_client()

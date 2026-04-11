@@ -76,7 +76,6 @@ class RagQuery(BaseModel):
     query: str
     n_results: int = 8
     chapter_id: str | None = None
-    course_id: str | None = None
     subject_id: str | None = None
 
 
@@ -86,7 +85,6 @@ def rag_query(body: RagQuery) -> dict[str, Any]:
         body.query,
         n_results=body.n_results,
         chapter_id=body.chapter_id,
-        course_id=body.course_id,
         subject_id=body.subject_id,
     )
     return {
@@ -98,7 +96,6 @@ def rag_query(body: RagQuery) -> dict[str, Any]:
 
 class ChapterContent(BaseModel):
     subject_id: str
-    course_id: str
     chapter_id: str
 
 
@@ -110,14 +107,11 @@ def chapter_content(body: ChapterContent) -> dict[str, Any]:
     for subj in tax.get("subjects", []):
         if subj["id"] != body.subject_id:
             continue
-        for course in subj.get("courses", []):
-            if course["id"] != body.course_id:
-                continue
-            for ch in course.get("chapters", []):
-                if ch["id"] == body.chapter_id:
-                    rel = ch.get("path", f"{body.subject_id}/{body.course_id}/{body.chapter_id}")
-                    ch_dir = SUBJECTS_ROOT / rel
-                    break
+        for ch in subj.get("chapters", []):
+            if ch["id"] == body.chapter_id:
+                rel = ch.get("path", f"{body.subject_id}/{body.chapter_id}")
+                ch_dir = SUBJECTS_ROOT / rel
+                break
     if ch_dir is None or not ch_dir.is_dir():
         raise HTTPException(404, "Chapter not found")
 
@@ -148,7 +142,6 @@ def chapter_content(body: ChapterContent) -> dict[str, Any]:
 class AssistBody(BaseModel):
     question: str
     chapter_id: str | None = None
-    course_id: str | None = None
     subject_id: str | None = None
 
 
@@ -159,7 +152,6 @@ async def assist(body: AssistBody) -> dict[str, str]:
         body.question,
         n_results=10,
         chapter_id=body.chapter_id,
-        course_id=body.course_id,
         subject_id=body.subject_id,
     )
     ctx = ollama.format_rag_context(rq)
@@ -203,27 +195,19 @@ def _parse_questions(raw: str) -> list[dict[str, Any]]:
 
 class QuizGenBody(BaseModel):
     chapter_id: str
-    course_id: str
     subject_id: str
     num_questions: int = 10
 
 
 @app.post("/api/quiz/generate")
 async def quiz_generate(body: QuizGenBody) -> dict[str, Any]:
-    """Génère un QCM via RAG + Ollama en batches de 10 questions max.
-
-    Strategy A: sequential batching server-side.
-    The backend makes ceil(num_questions / BATCH_SIZE) sequential Ollama calls,
-    concatenates the results, and returns a single JSON response.
-    The frontend just shows a loading indicator.
-    """
+    """Génère un QCM via RAG + Ollama en batches de 10 questions max."""
     num = max(1, min(body.num_questions, 50))  # cap at 50
 
     rq = rag.query_courses(
         f"notions importantes cours chapitre {body.chapter_id}",
         n_results=12,
         chapter_id=body.chapter_id,
-        course_id=body.course_id,
         subject_id=body.subject_id,
     )
     ctx = ollama.format_rag_context(rq)
@@ -297,13 +281,12 @@ class OpenEvalBody(BaseModel):
     question: str
     answer: str
     chapter_id: str | None = None
-    course_id: str | None = None
     subject_id: str | None = None
 
 
 @app.post("/api/quiz/open-eval")
 async def open_eval(body: OpenEvalBody) -> dict[str, str]:
-    rq = rag.query_courses(body.question, n_results=6, chapter_id=body.chapter_id, course_id=body.course_id, subject_id=body.subject_id)
+    rq = rag.query_courses(body.question, n_results=6, chapter_id=body.chapter_id, subject_id=body.subject_id)
     ctx = ollama.format_rag_context(rq)
     prompt = f"""Contexte :
 {ctx}
@@ -474,13 +457,11 @@ def _slugify(text: str) -> str:
 def _ensure_taxonomy_entry(
     subject_id: str,
     subject_title: str,
-    course_id: str,
-    course_title: str,
     chapter_id: str,
     chapter_title: str,
     chapter_path: str,
 ) -> None:
-    """Add subject/course/chapter to taxonomy.yaml if not already present."""
+    """Add subject/chapter to taxonomy.yaml if not already present."""
     tax_path = SUBJECTS_ROOT / "taxonomy.yaml"
     if tax_path.exists():
         tax = yaml.safe_load(tax_path.read_text(encoding="utf-8")) or {}
@@ -492,18 +473,11 @@ def _ensure_taxonomy_entry(
     # Find or create subject
     subj = next((s for s in subjects if s["id"] == subject_id), None)
     if not subj:
-        subj = {"id": subject_id, "title": subject_title, "courses": []}
+        subj = {"id": subject_id, "title": subject_title, "chapters": []}
         subjects.append(subj)
 
-    # Find or create course
-    courses: list[dict] = subj.setdefault("courses", [])
-    course = next((c for c in courses if c["id"] == course_id), None)
-    if not course:
-        course = {"id": course_id, "title": course_title, "chapters": []}
-        courses.append(course)
-
     # Find or create chapter
-    chapters: list[dict] = course.setdefault("chapters", [])
+    chapters: list[dict] = subj.setdefault("chapters", [])
     ch = next((c for c in chapters if c["id"] == chapter_id), None)
     if not ch:
         chapters.append({"id": chapter_id, "title": chapter_title, "path": chapter_path})
@@ -514,14 +488,14 @@ def _ensure_taxonomy_entry(
     )
 
 
-class DeleteCourseBody(BaseModel):
+class DeleteChapterBody(BaseModel):
     subject_id: str
-    course_id: str
+    chapter_id: str
 
 
-@app.post("/api/courses/delete")
-async def courses_delete(body: DeleteCourseBody) -> dict[str, Any]:
-    """Delete a course: remove files, update taxonomy, reindex RAG."""
+@app.post("/api/chapters/delete")
+async def chapters_delete(body: DeleteChapterBody) -> dict[str, Any]:
+    """Delete a chapter: remove files, update taxonomy, reindex RAG."""
     import shutil
 
     tax_path = SUBJECTS_ROOT / "taxonomy.yaml"
@@ -535,21 +509,22 @@ async def courses_delete(body: DeleteCourseBody) -> dict[str, Any]:
     if not subj:
         raise HTTPException(404, f"Subject '{body.subject_id}' not found")
 
-    courses: list[dict] = subj.get("courses", [])
-    course = next((c for c in courses if c["id"] == body.course_id), None)
-    if not course:
-        raise HTTPException(404, f"Course '{body.course_id}' not found")
+    chapters: list[dict] = subj.get("chapters", [])
+    chapter = next((c for c in chapters if c["id"] == body.chapter_id), None)
+    if not chapter:
+        raise HTTPException(404, f"Chapter '{body.chapter_id}' not found")
 
-    # Remove course files from disk
-    course_dir = SUBJECTS_ROOT / body.subject_id / body.course_id
-    if course_dir.exists():
-        shutil.rmtree(course_dir)
+    # Remove chapter files from disk
+    ch_path = chapter.get("path", f"{body.subject_id}/{body.chapter_id}")
+    ch_dir = SUBJECTS_ROOT / ch_path
+    if ch_dir.exists():
+        shutil.rmtree(ch_dir)
 
-    # Remove course from taxonomy
-    courses.remove(course)
+    # Remove chapter from taxonomy
+    chapters.remove(chapter)
 
-    # If subject has no more courses, remove it entirely
-    if not courses:
+    # If subject has no more chapters, remove it entirely
+    if not chapters:
         subjects.remove(subj)
         subj_dir = SUBJECTS_ROOT / body.subject_id
         if subj_dir.exists() and not any(subj_dir.iterdir()):
@@ -563,7 +538,7 @@ async def courses_delete(body: DeleteCourseBody) -> dict[str, Any]:
     # Reindex RAG
     result: dict[str, Any] = {
         "deleted_subject": body.subject_id,
-        "deleted_course": body.course_id,
+        "deleted_chapter": body.chapter_id,
     }
     try:
         idx = ingest.index_courses()
@@ -578,7 +553,6 @@ async def courses_delete(body: DeleteCourseBody) -> dict[str, Any]:
 async def courses_upload(
     file: UploadFile,
     subject_title: str = Form(...),
-    course_title: str = Form(...),
     chapter_title: str = Form(...),
     reindex: str = Form("true"),
 ) -> dict[str, Any]:
@@ -591,9 +565,8 @@ async def courses_upload(
     text = content.decode("utf-8", errors="replace")
 
     subject_id = _slugify(subject_title)
-    course_id = _slugify(course_title)
     chapter_id = _slugify(chapter_title)
-    rel_path = f"{subject_id}/{course_id}/{chapter_id}"
+    rel_path = f"{subject_id}/{chapter_id}"
 
     ch_dir = SUBJECTS_ROOT / rel_path
     ch_dir.mkdir(parents=True, exist_ok=True)
@@ -603,14 +576,12 @@ async def courses_upload(
 
     _ensure_taxonomy_entry(
         subject_id, subject_title,
-        course_id, course_title,
         chapter_id, chapter_title,
         rel_path,
     )
 
     result: dict[str, Any] = {
         "subject_id": subject_id,
-        "course_id": course_id,
         "chapter_id": chapter_id,
         "path": rel_path,
         "filename": dest.name,

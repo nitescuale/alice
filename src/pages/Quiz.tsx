@@ -18,8 +18,7 @@ import { Badge } from "../components/Badge";
 import { ProgressRing } from "../components/ProgressRing";
 
 type Chapter = { id: string; title: string };
-type Course = { id: string; title: string; chapters: Chapter[] };
-type Subject = { id: string; title: string; courses: Course[] };
+type Subject = { id: string; title: string; chapters: Chapter[] };
 
 type QItem = { q: string; options: string[]; correct: number };
 
@@ -31,7 +30,7 @@ let _stash: {
   questions: QItem[];
   answers: Record<string, number>;
   result: { correct: number; total: number; score: number } | null;
-  filters: { subjectId: string; courseId: string; chapterId: string; numQuestions: string };
+  filters: { subjectId: string; chapterId: string; numQuestions: string };
 } | null = null;
 
 const LETTERS = ["A", "B", "C", "D", "E", "F"];
@@ -46,7 +45,6 @@ const NUM_QUESTION_OPTIONS = [
 export function Quiz() {
   const [tax, setTax] = useState<{ subjects: Subject[] } | null>(null);
   const [subjectId, setSubjectId] = useState("");
-  const [courseId, setCourseId] = useState("");
   const [chapterId, setChapterId] = useState("");
   const [numQuestions, setNumQuestions] = useState("10");
   const [questions, setQuestions] = useState<QItem[]>([]);
@@ -105,22 +103,16 @@ export function Quiz() {
     api<{ subjects: Subject[] }>("/api/taxonomy")
       .then((t) => {
         setTax(t);
-        // Restore filters from stash if available, otherwise default to first
         if (_stash?.filters) {
           setSubjectId(_stash.filters.subjectId);
-          setCourseId(_stash.filters.courseId);
           setChapterId(_stash.filters.chapterId);
           setNumQuestions(_stash.filters.numQuestions);
         } else {
           const s0 = t.subjects[0];
           if (s0) {
             setSubjectId(s0.id);
-            const c0 = s0.courses[0];
-            if (c0) {
-              setCourseId(c0.id);
-              const ch0 = c0.chapters[0];
-              if (ch0) setChapterId(ch0.id);
-            }
+            const ch0 = s0.chapters[0];
+            if (ch0) setChapterId(ch0.id);
           }
         }
       })
@@ -133,20 +125,16 @@ export function Quiz() {
       .catch(() => {});
   }, [result]);
 
-  const courses = useMemo(() => {
-    return tax?.subjects.find((s) => s.id === subjectId)?.courses ?? [];
-  }, [tax, subjectId]);
-
   const chapters = useMemo(() => {
-    return courses.find((c) => c.id === courseId)?.chapters ?? [];
-  }, [courses, courseId]);
+    return tax?.subjects.find((s) => s.id === subjectId)?.chapters ?? [];
+  }, [tax, subjectId]);
 
   const answeredCount = Object.keys(answers).length;
   const progress =
     questions.length > 0 ? (answeredCount / questions.length) * 100 : 0;
 
   async function generate() {
-    if (!chapterId || !courseId || !subjectId) return;
+    if (!chapterId || !subjectId) return;
     setErr("");
     setLoading(true);
     setResult(null);
@@ -170,7 +158,6 @@ export function Quiz() {
         method: "POST",
         body: JSON.stringify({
           chapter_id: chapterId,
-          course_id: courseId,
           subject_id: subjectId,
           num_questions: n,
         }),
@@ -182,7 +169,7 @@ export function Quiz() {
       ? `Generation du quiz (${n} questions en ${batchCount} batches)...`
       : "Generation du quiz...";
 
-    const filters = { subjectId, courseId, chapterId, numQuestions };
+    const filters = { subjectId, chapterId, numQuestions };
 
     try {
       const data = await promise;
@@ -242,7 +229,6 @@ export function Quiz() {
         ? `${base} quiz-option--selected`
         : base;
     }
-    // After grading
     const q = questions[qIdx];
     if (optIdx === q.correct) return `${base} quiz-option--correct`;
     if (answers[String(qIdx)] === optIdx && optIdx !== q.correct)
@@ -280,17 +266,6 @@ export function Quiz() {
           value={subjectId}
           onChange={(e) => {
             setSubjectId(e.target.value);
-            setCourseId("");
-            setChapterId("");
-          }}
-        />
-        <Select
-          label="Cours"
-          options={courses.map((c) => ({ value: c.id, label: c.title }))}
-          placeholder="Cours"
-          value={courseId}
-          onChange={(e) => {
-            setCourseId(e.target.value);
             setChapterId("");
           }}
         />

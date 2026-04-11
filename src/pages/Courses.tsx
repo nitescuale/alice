@@ -6,7 +6,6 @@ import "katex/dist/katex.min.css";
 import {
   ChevronRight,
   BookOpen,
-  Folder,
   FileText,
   Send,
   AlertCircle,
@@ -22,8 +21,7 @@ import { Button } from "../components/Button";
 import { Badge } from "../components/Badge";
 
 type Chapter = { id: string; title: string; path?: string };
-type Course = { id: string; title: string; chapters: Chapter[] };
-type Subject = { id: string; title: string; courses: Course[] };
+type Subject = { id: string; title: string; chapters: Chapter[] };
 
 interface ChatMessage {
   role: "user" | "ai";
@@ -35,7 +33,6 @@ export function Courses() {
   const [openSubjects, setOpenSubjects] = useState<Set<string>>(new Set());
   const [sel, setSel] = useState<{
     subjectId: string;
-    courseId: string;
     chapterId: string;
   } | null>(null);
   const [content, setContent] = useState<{
@@ -52,15 +49,14 @@ export function Courses() {
     api<{ subjects: Subject[] }>("/api/taxonomy")
       .then((t) => {
         setTax(t);
-        // Open all subjects by default
         setOpenSubjects(new Set(t.subjects.map((s) => s.id)));
       })
       .catch((e: Error) => setErr(String(e.message)));
   }, []);
 
   const loadChapter = useCallback(
-    async (subjectId: string, courseId: string, chapterId: string) => {
-      setSel({ subjectId, courseId, chapterId });
+    async (subjectId: string, chapterId: string) => {
+      setSel({ subjectId, chapterId });
       setErr("");
       setLoading(true);
       setChatHistory([]);
@@ -71,7 +67,6 @@ export function Courses() {
             method: "POST",
             body: JSON.stringify({
               subject_id: subjectId,
-              course_id: courseId,
               chapter_id: chapterId,
             }),
           }
@@ -100,15 +95,12 @@ export function Courses() {
     });
   }
 
-  // Find prev/next chapter
   function getAdjacentChapters() {
     if (!tax || !sel) return { prev: null, next: null };
-    const allChapters: { subjectId: string; courseId: string; chapter: Chapter }[] = [];
+    const allChapters: { subjectId: string; chapter: Chapter }[] = [];
     for (const s of tax.subjects) {
-      for (const c of s.courses) {
-        for (const ch of c.chapters) {
-          allChapters.push({ subjectId: s.id, courseId: c.id, chapter: ch });
-        }
+      for (const ch of s.chapters) {
+        allChapters.push({ subjectId: s.id, chapter: ch });
       }
     }
     const idx = allChapters.findIndex((c) => c.chapter.id === sel.chapterId);
@@ -131,7 +123,6 @@ export function Courses() {
         body: JSON.stringify({
           question,
           subject_id: sel.subjectId,
-          course_id: sel.courseId,
           chapter_id: sel.chapterId,
         }),
       });
@@ -143,20 +134,18 @@ export function Courses() {
     }
   }
 
-  async function deleteCourse(subjectId: string, courseId: string, courseTitle: string) {
-    if (!confirm(`Supprimer le cours « ${courseTitle} » ? Cette action est irréversible.`)) return;
+  async function deleteChapter(subjectId: string, chapterId: string, chapterTitle: string) {
+    if (!confirm(`Supprimer « ${chapterTitle} » ? Cette action est irréversible.`)) return;
     setErr("");
     try {
-      await api("/api/courses/delete", {
+      await api("/api/chapters/delete", {
         method: "POST",
-        body: JSON.stringify({ subject_id: subjectId, course_id: courseId }),
+        body: JSON.stringify({ subject_id: subjectId, chapter_id: chapterId }),
       });
-      // Refresh taxonomy
       const t = await api<{ subjects: Subject[] }>("/api/taxonomy");
       setTax(t);
       setOpenSubjects(new Set(t.subjects.map((s) => s.id)));
-      // Clear content if we were viewing a chapter from the deleted course
-      if (sel?.subjectId === subjectId && sel?.courseId === courseId) {
+      if (sel?.chapterId === chapterId) {
         setSel(null);
         setContent(null);
       }
@@ -188,7 +177,7 @@ export function Courses() {
       <div className="page-header">
         <h1 className="page-header__title">Cours</h1>
         <p className="page-header__subtitle">
-          Parcourez vos matieres, cours et chapitres. L'assistant RAG peut
+          Parcourez vos matieres et chapitres. L'assistant RAG peut
           repondre a vos questions sur le contenu.
         </p>
       </div>
@@ -246,38 +235,28 @@ export function Courses() {
               </button>
 
               {openSubjects.has(s.id) &&
-                s.courses.map((c) => (
-                  <div key={c.id}>
-                    <div className="tree-course">
-                      <div className="tree-course__label">
-                        <Folder size={12} />
-                        {c.title}
-                      </div>
-                      <button
-                        type="button"
-                        className="tree-course__delete"
-                        title="Supprimer ce cours"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deleteCourse(s.id, c.id, c.title);
-                        }}
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </div>
-                    {c.chapters.map((ch) => (
-                      <div key={ch.id} className="tree-chapter">
-                        <button
-                          type="button"
-                          className={`tree-chapter__btn ${sel?.chapterId === ch.id ? "tree-chapter__btn--active" : ""}`}
-                          onClick={() => loadChapter(s.id, c.id, ch.id)}
-                        >
-                          <span className="tree-chapter__dot" />
-                          <FileText size={12} style={{ flexShrink: 0, opacity: 0.5 }} />
-                          {ch.title}
-                        </button>
-                      </div>
-                    ))}
+                s.chapters?.map((ch) => (
+                  <div key={ch.id} className="tree-chapter">
+                    <button
+                      type="button"
+                      className={`tree-chapter__btn ${sel?.chapterId === ch.id ? "tree-chapter__btn--active" : ""}`}
+                      onClick={() => loadChapter(s.id, ch.id)}
+                    >
+                      <span className="tree-chapter__dot" />
+                      <FileText size={12} style={{ flexShrink: 0, opacity: 0.5 }} />
+                      {ch.title}
+                    </button>
+                    <button
+                      type="button"
+                      className="tree-chapter__delete"
+                      title="Supprimer ce chapitre"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteChapter(s.id, ch.id, ch.title);
+                      }}
+                    >
+                      <Trash2 size={12} />
+                    </button>
                   </div>
                 ))}
             </div>
@@ -334,9 +313,7 @@ export function Courses() {
                     variant="ghost"
                     size="sm"
                     icon={<ChevronLeft size={14} />}
-                    onClick={() =>
-                      loadChapter(prev.subjectId, prev.courseId, prev.chapter.id)
-                    }
+                    onClick={() => loadChapter(prev.subjectId, prev.chapter.id)}
                   >
                     {prev.chapter.title}
                   </Button>
@@ -347,9 +324,7 @@ export function Courses() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() =>
-                      loadChapter(next.subjectId, next.courseId, next.chapter.id)
-                    }
+                    onClick={() => loadChapter(next.subjectId, next.chapter.id)}
                   >
                     {next.chapter.title}
                     <ChevronRight size={14} />

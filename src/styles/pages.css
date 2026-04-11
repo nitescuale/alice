@@ -55,15 +55,14 @@
   transform: rotate(90deg);
 }
 
-.tree-course {
+.tree-chapter {
   padding-left: var(--sp-6);
-  margin-top: var(--sp-1);
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
 
-.tree-course__delete {
+.tree-chapter__delete {
   background: none;
   border: none;
   color: var(--noir-500);
@@ -74,28 +73,12 @@
   transition: opacity 0.15s, color 0.15s;
 }
 
-.tree-course:hover .tree-course__delete {
+.tree-chapter:hover .tree-chapter__delete {
   opacity: 1;
 }
 
-.tree-course__delete:hover {
+.tree-chapter__delete:hover {
   color: var(--danger-500);
-}
-
-.tree-course__label {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  padding: var(--sp-1) var(--sp-2);
-  font-size: var(--text-xs);
-  font-weight: 500;
-  color: var(--noir-300);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.tree-chapter {
-  padding-left: var(--sp-10);
 }
 
 .tree-chapter__btn {

@@ -64,7 +64,6 @@ def query_courses(
     query: str,
     n_results: int = 8,
     chapter_id: str | None = None,
-    course_id: str | None = None,
     subject_id: str | None = None,
 ) -> dict[str, Any]:
     col = get_course_collection()
@@ -73,8 +72,6 @@ def query_courses(
     conds: list[dict[str, Any]] = []
     if chapter_id:
         conds.append({"chapter_id": chapter_id})
-    if course_id:
-        conds.append({"course_id": course_id})
     if subject_id:
         conds.append({"subject_id": subject_id})
     if len(conds) == 1:

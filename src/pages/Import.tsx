@@ -17,7 +17,6 @@ import { Badge } from "../components/Badge";
 
 interface UploadResult {
   subject_id: string;
-  course_id: string;
   chapter_id: string;
   path: string;
   filename: string;
@@ -30,7 +29,7 @@ export function Import() {
   const [copied, setCopied] = useState(false);
 
   const [subjectTitle, setSubjectTitle] = useState("");
-  const [courseTitle, setCourseTitle] = useState("");
+  const [chapterTitle, setChapterTitle] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -70,7 +69,7 @@ export function Import() {
   }
 
   async function upload() {
-    if (!file || !subjectTitle.trim() || !courseTitle.trim()) return;
+    if (!file || !subjectTitle.trim() || !chapterTitle.trim()) return;
     setErr("");
     setResult(null);
     setLoading(true);
@@ -78,8 +77,7 @@ export function Import() {
     const form = new FormData();
     form.append("file", file);
     form.append("subject_title", subjectTitle.trim());
-    form.append("course_title", courseTitle.trim());
-    form.append("chapter_title", courseTitle.trim());
+    form.append("chapter_title", chapterTitle.trim());
     form.append("reindex", "true");
 
     try {
@@ -102,7 +100,7 @@ export function Import() {
     }
   }
 
-  const canUpload = file && subjectTitle.trim() && courseTitle.trim();
+  const canUpload = file && subjectTitle.trim() && chapterTitle.trim();
 
   return (
     <div>
@@ -191,11 +189,11 @@ export function Import() {
                 hint="Nom de la matiere (existante ou nouvelle)"
               />
               <Input
-                label="Cours"
-                value={courseTitle}
-                onChange={(e) => setCourseTitle(e.target.value)}
+                label="Chapitre"
+                value={chapterTitle}
+                onChange={(e) => setChapterTitle(e.target.value)}
                 placeholder="ex: Fondamentaux des Reseaux Complexes"
-                hint="Nom du cours a creer ou completer"
+                hint="Nom du chapitre a creer"
               />
 
               {/* Drop zone */}
@@ -277,7 +275,6 @@ export function Import() {
             </div>
             <div style={{ display: "flex", gap: "var(--sp-3)", flexWrap: "wrap", marginBottom: "var(--sp-3)" }}>
               <Badge variant="amber" size="sm">{result.subject_id}</Badge>
-              <Badge variant="info" size="sm">{result.course_id}</Badge>
               <Badge variant="default" size="sm">{result.chapter_id}</Badge>
             </div>
             <p style={{ fontSize: "var(--text-xs)", color: "var(--noir-400)", margin: "0 0 var(--sp-2)" }}>

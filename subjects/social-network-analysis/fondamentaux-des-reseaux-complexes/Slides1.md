@@ -32,10 +32,4 @@ Les réseaux complexes réels partagent des caractéristiques non triviales qui 
 Un graphe peut être informatiquement représenté de plusieurs manières :
 *   **Matrice d'Adjacence ($A$)** : Une matrice de taille $n \times n$ où $a_{ij} = 1$ si le lien $\{v_i, v_j\}$ existe, et $0$ sinon. Pour un graphe non orienté, cette matrice est symétrique. Le terme $A^k[i, j]$ représente le nombre de marches (walks) de longueur $k$ existant entre $v_i$ et $v_j$.
 *   **Matrice d'Incidence ($B$)** : $b_{ik} = 1$ si le nœud $v_i$ est incident à l'arête $k$, et $0$ sinon.
-*   **Liste d'Arêtes (Edge List)** : Très adaptée aux graphes peu denses (parcimonieux), elle consiste simplement à lister les paires de sommets connectés.
-n, m)$ avec $m$ arêtes choisies aléatoirement (complexité $\mathcal{O}(m)$). Leurs graphes sont parcimonieux et ont un faible diamètre, mais la distribution des degrés est homogène et leur coefficient de clustering est très faible.
-2.  **Modèle de Molloy & Reed** : Impose une distribution de degrés hétérogène avec un liage aléatoire. Le graphe a un faible diamètre, est parcimonieux, a une distribution de degrés hétérogène mais souffre encore d'un faible clustering.
-3.  **Modèle de Watts-Strogatz** : Reproduit le phénomène du "petit monde" en produisant des graphes avec un faible diamètre, tout en maintenant un coefficient de clustering élevé. Cependant, sa distribution de degrés reste homogène.
-4.  **Modèle d'Attachement Préférentiel (Barabási-Albert)** : Simule la façon dont de nombreux réseaux réels croissent. Les nouveaux nœuds se connectent avec une probabilité proportionnelle au degré des nœuds existants. Ce modèle produit des graphes de type "Scale-Free" avec une distribution de degrés hétérogène et un faible diamètre, mais le coefficient de clustering reste généralement très faible.
-
----
+*   **Liste d'Arêtes (Edge List)** : Très adaptée aux graphes peu denses (parcimonieux), elle consiste simplement à lister les paires de sommets connectés.
