@@ -85,8 +85,13 @@ def index_courses() -> dict[str, Any]:
                         indexed_files += 1
                         chunk_count += len(chunks)
 
+    # Full rebuild: drop and recreate the collection
+    client = rag.get_client()
+    try:
+        client.delete_collection(rag.COLLECTION_COURSES)
+    except Exception:  # noqa: BLE001
+        pass
     col = rag.get_course_collection()
-    col.delete(where={})  # full rebuild
     if ids:
         rag.upsert_course_chunks(ids, documents, metadatas)
 
@@ -134,8 +139,13 @@ def index_interviews() -> dict[str, Any]:
                 }
             )
 
+    # Full rebuild: drop and recreate the collection
+    client = rag.get_client()
+    try:
+        client.delete_collection(rag.COLLECTION_INTERVIEWS)
+    except Exception:  # noqa: BLE001
+        pass
     col = rag.get_interview_collection()
-    col.delete(where={})
     if ids:
         rag.upsert_interview_chunks(ids, documents, metadatas)
 

@@ -147,7 +147,9 @@ export function Courses() {
         method: "POST",
         body: JSON.stringify({ interviews: true }),
       });
-      setIndexMsg(JSON.stringify(r, null, 2));
+      const chunks = Number(r.chunks ?? 0);
+      const files = Number(r.indexed_files ?? 0);
+      setIndexMsg(`Indexation terminée — ${files} fichier${files > 1 ? "s" : ""}, ${chunks} chunk${chunks > 1 ? "s" : ""}`);
     } catch (e) {
       setErr(String(e));
     }
