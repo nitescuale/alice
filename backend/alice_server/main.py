@@ -226,6 +226,12 @@ async def quiz_generate(body: QuizGenBody) -> dict[str, Any]:
     )
     ctx = ollama.format_rag_context(rq)
 
+    if not ctx.strip():
+        raise HTTPException(
+            status_code=422,
+            detail="Aucun contenu indexé pour ce chapitre. Cliquez sur « Réindexer RAG » dans l'écran Cours d'abord.",
+        )
+
     all_questions: list[dict[str, Any]] = []
     remaining = num
 
@@ -238,10 +244,12 @@ async def quiz_generate(body: QuizGenBody) -> dict[str, Any]:
             prev_texts = "\n".join(f"- {q['q']}" for q in all_questions[:20])
             already = f"\nQuestions déjà générées (ne pas répéter) :\n{prev_texts}\n"
 
-        prompt = f"""Contexte pédagogique :
+        prompt = f"""Voici le contenu du cours sur lequel tu dois te baser EXCLUSIVEMENT :
+
 {ctx}
 {already}
-Génère exactement {batch_n} questions à choix multiples (4 propositions, une seule bonne).
+À partir de CE CONTENU UNIQUEMENT, génère exactement {batch_n} questions à choix multiples (4 propositions, une seule bonne).
+INTERDIT de poser des questions qui ne sont pas directement liées au contenu ci-dessus.
 Réponds UNIQUEMENT avec un JSON valide de ce schéma :
 {{"questions":[{{"q":"...","options":["a","b","c","d"],"correct":0}}]}}
 correct est l'index 0-3 de la bonne réponse. Questions en français."""
