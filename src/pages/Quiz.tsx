@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   XCircle,
   Loader2,
+  Square,
 } from "lucide-react";
 import { api } from "../api";
 import { Card } from "../components/Card";
@@ -25,10 +26,12 @@ type QItem = { q: string; options: string[]; correct: number };
 /* ---- Module-level state: survives component unmount/remount ---- */
 let _genPromise: Promise<{ questions?: QItem[]; raw?: string }> | null = null;
 let _genLoadingMsg = "";
+let _genAbort: AbortController | null = null;
 let _stash: {
   questions: QItem[];
   answers: Record<string, number>;
   result: { correct: number; total: number; score: number } | null;
+  filters: { subjectId: string; courseId: string; chapterId: string; numQuestions: string };
 } | null = null;
 
 const LETTERS = ["A", "B", "C", "D", "E", "F"];
@@ -67,7 +70,11 @@ export function Quiz() {
         .then((data) => {
           const qs = data.questions ?? [];
           setQuestions(qs);
-          _stash = { questions: qs, answers: {}, result: null };
+          if (_stash) {
+            _stash.questions = qs;
+            _stash.answers = {};
+            _stash.result = null;
+          }
           if (!qs.length && data.raw) {
             setErr("Reponse LLM non JSON : verifiez Ollama / le modele.");
           }
@@ -98,14 +105,22 @@ export function Quiz() {
     api<{ subjects: Subject[] }>("/api/taxonomy")
       .then((t) => {
         setTax(t);
-        const s0 = t.subjects[0];
-        if (s0) {
-          setSubjectId(s0.id);
-          const c0 = s0.courses[0];
-          if (c0) {
-            setCourseId(c0.id);
-            const ch0 = c0.chapters[0];
-            if (ch0) setChapterId(ch0.id);
+        // Restore filters from stash if available, otherwise default to first
+        if (_stash?.filters) {
+          setSubjectId(_stash.filters.subjectId);
+          setCourseId(_stash.filters.courseId);
+          setChapterId(_stash.filters.chapterId);
+          setNumQuestions(_stash.filters.numQuestions);
+        } else {
+          const s0 = t.subjects[0];
+          if (s0) {
+            setSubjectId(s0.id);
+            const c0 = s0.courses[0];
+            if (c0) {
+              setCourseId(c0.id);
+              const ch0 = c0.chapters[0];
+              if (ch0) setChapterId(ch0.id);
+            }
           }
         }
       })
@@ -146,6 +161,9 @@ export function Quiz() {
       setLoadingMsg("Generation du quiz...");
     }
 
+    const abort = new AbortController();
+    _genAbort = abort;
+
     const promise = api<{ questions?: QItem[]; raw?: string }>(
       "/api/quiz/generate",
       {
@@ -156,6 +174,7 @@ export function Quiz() {
           subject_id: subjectId,
           num_questions: n,
         }),
+        signal: abort.signal,
       }
     );
     _genPromise = promise;
@@ -163,21 +182,35 @@ export function Quiz() {
       ? `Generation du quiz (${n} questions en ${batchCount} batches)...`
       : "Generation du quiz...";
 
+    const filters = { subjectId, courseId, chapterId, numQuestions };
+
     try {
       const data = await promise;
       const qs = data.questions ?? [];
       setQuestions(qs);
-      _stash = { questions: qs, answers: {}, result: null };
+      _stash = { questions: qs, answers: {}, result: null, filters };
       if (!qs.length && data.raw) {
         setErr("Reponse LLM non JSON : verifiez Ollama / le modele.");
       }
     } catch (e) {
+      if (abort.signal.aborted) return;
       setErr(String(e));
     } finally {
       _genPromise = null;
+      _genAbort = null;
       setLoading(false);
       setLoadingMsg("");
     }
+  }
+
+  function cancelGeneration() {
+    if (_genAbort) {
+      _genAbort.abort();
+      _genAbort = null;
+    }
+    _genPromise = null;
+    setLoading(false);
+    setLoadingMsg("");
   }
 
   async function grade() {
@@ -295,6 +328,9 @@ export function Quiz() {
           <span className="quiz-loading__hint">
             Le modele LLM genere les questions — cela peut prendre quelques instants.
           </span>
+          <Button variant="ghost" size="sm" icon={<Square size={12} />} onClick={cancelGeneration}>
+            Annuler
+          </Button>
         </div>
       )}
 
