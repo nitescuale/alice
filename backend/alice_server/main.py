@@ -580,9 +580,10 @@ async def courses_upload(
     subject_title: str = Form(...),
     course_title: str = Form(...),
     chapter_title: str = Form(...),
-    reindex: bool = Form(True),
+    reindex: str = Form("true"),
 ) -> dict[str, Any]:
     """Upload a NotebookLM-generated markdown file as a new chapter."""
+    do_reindex = reindex.lower() in ("true", "1", "yes")
     if not file.filename:
         raise HTTPException(422, "No file provided")
 
@@ -615,7 +616,7 @@ async def courses_upload(
         "filename": dest.name,
     }
 
-    if reindex:
+    if do_reindex:
         try:
             idx = ingest.index_courses()
             result["index"] = idx

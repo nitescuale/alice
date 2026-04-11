@@ -39,9 +39,15 @@ export function Import() {
 
   useEffect(() => {
     fetch(`${apiBase}/api/notebooklm-prompt`)
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(r.statusText);
+        return r.json();
+      })
       .then((d: { prompt: string }) => setPrompt(d.prompt))
-      .catch(() => {});
+      .catch((e) => setErr(e instanceof TypeError
+        ? "Impossible de contacter le backend — vérifiez qu'il tourne."
+        : String(e),
+      ));
   }, []);
 
   function copyPrompt() {
@@ -87,7 +93,10 @@ export function Import() {
       setResult(data);
       setFile(null);
     } catch (e) {
-      setErr(String(e));
+      const msg = e instanceof TypeError
+        ? "Impossible de contacter le backend — vérifiez qu'il tourne."
+        : String(e);
+      setErr(msg);
     } finally {
       setLoading(false);
     }
