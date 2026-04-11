@@ -10,7 +10,7 @@ CHROMA_PATH = Path(os.environ.get("ALICE_CHROMA_PATH", str(PROJECT_ROOT / ".alic
 SQLITE_PATH = Path(os.environ.get("ALICE_SQLITE_PATH", str(PROJECT_ROOT / ".alice_data" / "alice.db")))
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma2:2b")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma4:e4b")
 
 # Overrides set via POST /api/settings (session du processus backend)
 _runtime_ollama_host: str | None = None

@@ -33,7 +33,7 @@ cd alice
 npm run dev:backend
 ```
 
-2. **Tauri + Vite** :
+1. **Tauri + Vite** :
 
 ```bash
 cd alice
@@ -48,7 +48,7 @@ npm run dev:full
 
 ## Contenu des cours
 
-- Éditer [`subjects/taxonomy.yaml`](subjects/taxonomy.yaml) (matières → cours → chapitres).
+- Éditer `[subjects/taxonomy.yaml](subjects/taxonomy.yaml)` (matières → cours → chapitres).
 - Placer les fichiers par chapitre sous `subjects/...` (PDF, Markdown, `.ipynb`, `.py`).
 - Workflow auteur recommandé : **NotebookLM** → export manuel → ces dossiers.
 - Dans l’app : **Réindexer RAG** (écran Cours) après ajout de fichiers.
@@ -66,6 +66,3 @@ npm run build
 
 Les assets sont dans `dist/`. L’UI appelle alors `http://127.0.0.1:8765` (backend à lancer à part).
 
-## Licence
-
-Projet open source — préciser la licence choisie dans le dépôt.
