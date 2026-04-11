@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:backend": "cd backend && python -m uvicorn alice_server.main:app --reload --host 127.0.0.1 --port 8765",
+    "dev:backend": "cd backend && .venv/Scripts/python.exe -m uvicorn alice_server.main:app --reload --host 127.0.0.1 --port 8765",
     "dev:full": "concurrently -k -n backend,frontend -c blue,magenta \"npm run dev:backend\" \"npm run dev\"",
     "build": "tsc && vite build",
     "preview": "vite preview",
