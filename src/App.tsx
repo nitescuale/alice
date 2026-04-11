@@ -6,6 +6,7 @@ import { Quiz } from "./pages/Quiz";
 import { Interviews } from "./pages/Interviews";
 import { Settings } from "./pages/Settings";
 import { GitHubImport } from "./pages/GitHubImport";
+import { Import } from "./pages/Import";
 
 function App() {
   return (
@@ -16,6 +17,7 @@ function App() {
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="quiz" element={<Quiz />} />
           <Route path="interviews" element={<Interviews />} />
+          <Route path="import" element={<Import />} />
           <Route path="github-import" element={<GitHubImport />} />
           <Route path="settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />

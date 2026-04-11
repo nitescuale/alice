@@ -6,6 +6,7 @@ import {
   Settings,
   BarChart3,
   GitBranch,
+  Upload,
 } from "lucide-react";
 
 export function Layout() {
@@ -80,6 +81,20 @@ export function Layout() {
             Interviews
           </NavLink>
 
+          <span className="alice-sidebar__nav-section">Importer</span>
+
+          <NavLink
+            to="/import"
+            className={({ isActive }) =>
+              `alice-sidebar__link ${isActive ? "alice-sidebar__link--active" : ""}`
+            }
+          >
+            <span className="alice-sidebar__link-icon">
+              <Upload size={18} />
+            </span>
+            Cours (NotebookLM)
+          </NavLink>
+
           <NavLink
             to="/github-import"
             className={({ isActive }) =>
@@ -89,7 +104,7 @@ export function Layout() {
             <span className="alice-sidebar__link-icon">
               <GitBranch size={18} />
             </span>
-            Import GitHub
+            GitHub
           </NavLink>
 
           <div style={{ flex: 1 }} />

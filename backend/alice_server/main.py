@@ -6,7 +6,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+import yaml
+
+from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -438,6 +440,122 @@ async def github_import_repo(body: GitHubImportBody) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     if body.reindex and result.get("files_written", 0) > 0:
+        try:
+            idx = ingest.index_courses()
+            result["index"] = idx
+        except Exception as exc:  # noqa: BLE001
+            result["index_error"] = str(exc)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Course file upload (NotebookLM output)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/notebooklm-prompt")
+def notebooklm_prompt() -> dict[str, str]:
+    """Return the NotebookLM prompt markdown."""
+    prompt_path = SUBJECTS_ROOT / "NOTEBOOKLM_PROMPT.md"
+    if not prompt_path.exists():
+        raise HTTPException(404, "NOTEBOOKLM_PROMPT.md not found")
+    return {"prompt": prompt_path.read_text(encoding="utf-8")}
+
+
+def _slugify(text: str) -> str:
+    """Simple slug: lowercase, spaces/underscores to hyphens, strip non-alnum."""
+    import re
+    text = text.strip().lower()
+    text = re.sub(r"[^a-z0-9\s_-]", "", text)
+    text = re.sub(r"[\s_]+", "-", text)
+    return text.strip("-") or "untitled"
+
+
+def _ensure_taxonomy_entry(
+    subject_id: str,
+    subject_title: str,
+    course_id: str,
+    course_title: str,
+    chapter_id: str,
+    chapter_title: str,
+    chapter_path: str,
+) -> None:
+    """Add subject/course/chapter to taxonomy.yaml if not already present."""
+    tax_path = SUBJECTS_ROOT / "taxonomy.yaml"
+    if tax_path.exists():
+        tax = yaml.safe_load(tax_path.read_text(encoding="utf-8")) or {}
+    else:
+        tax = {}
+
+    subjects: list[dict] = tax.setdefault("subjects", [])
+
+    # Find or create subject
+    subj = next((s for s in subjects if s["id"] == subject_id), None)
+    if not subj:
+        subj = {"id": subject_id, "title": subject_title, "courses": []}
+        subjects.append(subj)
+
+    # Find or create course
+    courses: list[dict] = subj.setdefault("courses", [])
+    course = next((c for c in courses if c["id"] == course_id), None)
+    if not course:
+        course = {"id": course_id, "title": course_title, "chapters": []}
+        courses.append(course)
+
+    # Find or create chapter
+    chapters: list[dict] = course.setdefault("chapters", [])
+    ch = next((c for c in chapters if c["id"] == chapter_id), None)
+    if not ch:
+        chapters.append({"id": chapter_id, "title": chapter_title, "path": chapter_path})
+
+    tax_path.write_text(
+        yaml.dump(tax, allow_unicode=True, default_flow_style=False, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
+@app.post("/api/courses/upload")
+async def courses_upload(
+    file: UploadFile,
+    subject_title: str = Form(...),
+    course_title: str = Form(...),
+    chapter_title: str = Form(...),
+    reindex: bool = Form(True),
+) -> dict[str, Any]:
+    """Upload a NotebookLM-generated markdown file as a new chapter."""
+    if not file.filename:
+        raise HTTPException(422, "No file provided")
+
+    content = await file.read()
+    text = content.decode("utf-8", errors="replace")
+
+    subject_id = _slugify(subject_title)
+    course_id = _slugify(course_title)
+    chapter_id = _slugify(chapter_title)
+    rel_path = f"{subject_id}/{course_id}/{chapter_id}"
+
+    ch_dir = SUBJECTS_ROOT / rel_path
+    ch_dir.mkdir(parents=True, exist_ok=True)
+
+    dest = ch_dir / (file.filename or "cours.md")
+    dest.write_text(text, encoding="utf-8")
+
+    _ensure_taxonomy_entry(
+        subject_id, subject_title,
+        course_id, course_title,
+        chapter_id, chapter_title,
+        rel_path,
+    )
+
+    result: dict[str, Any] = {
+        "subject_id": subject_id,
+        "course_id": course_id,
+        "chapter_id": chapter_id,
+        "path": rel_path,
+        "filename": dest.name,
+    }
+
+    if reindex:
         try:
             idx = ingest.index_courses()
             result["index"] = idx
