@@ -1,12 +1,22 @@
-# Taxonomie ALICE — matières, cours, chapitres (chemins relatifs à subjects/)
 subjects:
-  - id: data-science
-    title: Data Science
-    tags: [ml, statistics]
-    courses:
-      - id: ml-fondamentaux
-        title: Machine Learning — fondamentaux
-        chapters:
-          - id: ch01-intro
-            title: Introduction
-            path: data-science/ml-fondamentaux/ch01-intro
+- id: data-science
+  title: Data Science
+  tags:
+  - ml
+  - statistics
+  courses:
+  - id: ml-fondamentaux
+    title: Machine Learning — fondamentaux
+    chapters:
+    - id: ch01-intro
+      title: Introduction
+      path: data-science/ml-fondamentaux/ch01-intro
+- id: social-network-analysis
+  title: Social Network Analysis
+  courses:
+  - id: untitled
+    title: '-'
+    chapters:
+    - id: fondamentaux-des-rseaux-complexes
+      title: Fondamentaux des Réseaux Complexes
+      path: social-network-analysis/untitled/fondamentaux-des-rseaux-complexes

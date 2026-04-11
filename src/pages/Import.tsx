@@ -31,7 +31,6 @@ export function Import() {
 
   const [subjectTitle, setSubjectTitle] = useState("");
   const [courseTitle, setCourseTitle] = useState("");
-  const [chapterTitle, setChapterTitle] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -65,7 +64,7 @@ export function Import() {
   }
 
   async function upload() {
-    if (!file || !subjectTitle.trim() || !courseTitle.trim() || !chapterTitle.trim()) return;
+    if (!file || !subjectTitle.trim() || !courseTitle.trim()) return;
     setErr("");
     setResult(null);
     setLoading(true);
@@ -74,7 +73,7 @@ export function Import() {
     form.append("file", file);
     form.append("subject_title", subjectTitle.trim());
     form.append("course_title", courseTitle.trim());
-    form.append("chapter_title", chapterTitle.trim());
+    form.append("chapter_title", courseTitle.trim());
     form.append("reindex", "true");
 
     try {
@@ -94,7 +93,7 @@ export function Import() {
     }
   }
 
-  const canUpload = file && subjectTitle.trim() && courseTitle.trim() && chapterTitle.trim();
+  const canUpload = file && subjectTitle.trim() && courseTitle.trim();
 
   return (
     <div>
@@ -186,15 +185,8 @@ export function Import() {
                 label="Cours"
                 value={courseTitle}
                 onChange={(e) => setCourseTitle(e.target.value)}
-                placeholder="ex: Machine Learning — fondamentaux"
-                hint="Nom du cours dans cette matiere"
-              />
-              <Input
-                label="Chapitre"
-                value={chapterTitle}
-                onChange={(e) => setChapterTitle(e.target.value)}
-                placeholder="ex: Chapitre 1 — Introduction"
-                hint="Nom du chapitre a creer"
+                placeholder="ex: Fondamentaux des Reseaux Complexes"
+                hint="Nom du cours a creer ou completer"
               />
 
               {/* Drop zone */}

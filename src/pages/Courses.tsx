@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import Markdown from "react-markdown";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
 import {
   ChevronRight,
   BookOpen,
@@ -286,7 +289,7 @@ export function Courses() {
 
               <Card variant="default" padding="lg">
                 <div className="md-content">
-                  <Markdown>{content.markdown}</Markdown>
+                  <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{content.markdown}</Markdown>
                 </div>
               </Card>
 
@@ -352,7 +355,7 @@ export function Courses() {
                           <div className="assistant-msg__bubble">
                             {msg.role === "ai" ? (
                               <div className="md-content">
-                                <Markdown>{msg.text}</Markdown>
+                                <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{msg.text}</Markdown>
                               </div>
                             ) : (
                               msg.text
