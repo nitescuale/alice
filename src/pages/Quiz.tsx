@@ -50,19 +50,19 @@ export function Quiz() {
   const [subjectId, setSubjectId] = useState("");
   const [chapterId, setChapterId] = useState("");
   const [numQuestions, setNumQuestions] = useState("10");
-  const [questions, setQuestions] = useState<QItem[]>([]);
-  const [answers, setAnswers] = useState<Record<string, number>>({});
+  const [questions, setQuestions] = useState<QItem[]>(() => _stash?.questions ?? []);
+  const [answers, setAnswers] = useState<Record<string, number>>(() => _stash?.answers ?? {});
   const [result, setResult] = useState<{
     correct: number;
     total: number;
     score: number;
-  } | null>(null);
+  } | null>(() => _stash?.result ?? null);
   const [history, setHistory] = useState<Record<string, unknown>[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMsg, setLoadingMsg] = useState("");
   const [err, setErr] = useState("");
 
-  /* Restore state from module-level stash or pick up pending generation */
+  /* Pick up a pending generation that started before navigation */
   useEffect(() => {
     if (_genPromise) {
       setLoading(true);
@@ -86,10 +86,6 @@ export function Quiz() {
           setLoading(false);
           setLoadingMsg("");
         });
-    } else if (_stash) {
-      setQuestions(_stash.questions);
-      setAnswers(_stash.answers);
-      setResult(_stash.result);
     }
   }, []);
 

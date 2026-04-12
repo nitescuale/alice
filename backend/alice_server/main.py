@@ -260,6 +260,33 @@ def _validate_questions(qs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return valid
 
 
+async def _dedup_questions(qs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Use the LLM to identify and remove duplicate/near-duplicate questions."""
+    numbered = "\n".join(f"{i}: {q['q']}" for i, q in enumerate(qs))
+    prompt = f"""Voici une liste de questions numérotées :
+{numbered}
+
+Certaines questions portent sur le même sujet ou concept. Pour chaque groupe de doublons, garde UNIQUEMENT la question la plus détaillée et complète.
+Réponds avec un JSON contenant la liste des indices à SUPPRIMER (les moins bonnes copies).
+Exemple : {{"remove": [3, 7, 12]}}
+Si aucun doublon, réponds : {{"remove": []}}"""
+
+    try:
+        raw = await ollama.generate(
+            prompt,
+            system="Tu écris du JSON strict. Juste le JSON, rien d'autre.",
+            temperature=0.1,
+            force_json=True,
+        )
+        data = json.loads(_clean_json(raw.strip()))
+        to_remove = set(data.get("remove", []))
+        if not to_remove:
+            return qs
+        return [q for i, q in enumerate(qs) if i not in to_remove]
+    except Exception:
+        return qs  # on failure, keep all questions
+
+
 class QuizGenBody(BaseModel):
     chapter_id: str = ""
     subject_id: str
@@ -333,6 +360,10 @@ correct est l'index (0, 1, 2 ou 3) de la bonne réponse. Les options doivent êt
                 return {"questions": [], "raw": raw}
             break
         remaining -= batch_n
+
+    # Deduplicate questions that cover the same concept
+    if len(all_questions) > 5:
+        all_questions = await _dedup_questions(all_questions)
 
     return {"questions": all_questions}
 
