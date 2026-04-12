@@ -114,8 +114,6 @@ export function Quiz() {
           const s0 = t.subjects[0];
           if (s0) {
             setSubjectId(s0.id);
-            const ch0 = s0.chapters[0];
-            if (ch0) setChapterId(ch0.id);
           }
         }
       })
@@ -129,7 +127,8 @@ export function Quiz() {
   }, [result]);
 
   const chapters = useMemo(() => {
-    return tax?.subjects.find((s) => s.id === subjectId)?.chapters ?? [];
+    const raw = tax?.subjects.find((s) => s.id === subjectId)?.chapters ?? [];
+    return [{ id: "", title: "Tous les chapitres" }, ...raw];
   }, [tax, subjectId]);
 
   const answeredCount = Object.keys(answers).length;
@@ -137,7 +136,7 @@ export function Quiz() {
     questions.length > 0 ? (answeredCount / questions.length) * 100 : 0;
 
   async function generate() {
-    if (!chapterId || !subjectId) return;
+    if (!subjectId) return;
     setErr("");
     setLoading(true);
     setResult(null);
@@ -145,7 +144,7 @@ export function Quiz() {
     setQuestions([]);
 
     const n = parseInt(numQuestions, 10) || 10;
-    const batchCount = Math.ceil(n / 10);
+    const batchCount = Math.ceil(n / 5);
     if (batchCount > 1) {
       setLoadingMsg(`Generation du quiz (${n} questions en ${batchCount} batches)...`);
     } else {
@@ -204,7 +203,6 @@ export function Quiz() {
   }
 
   async function grade() {
-    if (!chapterId) return;
     setErr("");
     try {
       const r = await api<{
@@ -275,7 +273,6 @@ export function Quiz() {
         <Select
           label="Chapitre"
           options={chapters.map((ch) => ({ value: ch.id, label: ch.title }))}
-          placeholder="Chapitre"
           value={chapterId}
           onChange={(e) => setChapterId(e.target.value)}
         />
@@ -289,7 +286,7 @@ export function Quiz() {
           <Button
             variant="primary"
             icon={loading ? <Loader2 size={14} className="spin" /> : undefined}
-            disabled={loading || !chapterId}
+            disabled={loading || !subjectId}
             loading={loading}
             onClick={generate}
           >

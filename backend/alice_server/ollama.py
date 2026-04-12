@@ -14,6 +14,7 @@ async def generate(
     system: str | None = None,
     model: str | None = None,
     temperature: float = 0.4,
+    force_json: bool = False,
 ) -> str:
     m = model or get_ollama_model()
     host = get_ollama_host()
@@ -26,6 +27,8 @@ async def generate(
     }
     if system:
         payload["system"] = system
+    if force_json:
+        payload["format"] = "json"
 
     async with httpx.AsyncClient(timeout=300.0) as client:
         r = await client.post(url, json=payload)

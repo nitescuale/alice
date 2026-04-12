@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -167,7 +168,25 @@ Réponds en français de façon claire et structurée. Base-toi sur le contexte;
 
 
 _BATCH_SIZE = 5  # questions per LLM call — local models struggle with more
-_MAX_RETRIES = 2  # retry on JSON parse failure
+_MAX_RETRIES = 3  # retry on JSON parse failure
+
+
+def _clean_json(raw: str) -> str:
+    """Fix common JSON issues from LLM output."""
+    # Remove trailing commas before ] or }
+    raw = re.sub(r',\s*([}\]])', r'\1', raw)
+    return raw
+
+
+def _extract_questions(data: Any) -> list[dict[str, Any]]:
+    """Extract questions list from parsed JSON (could be object or array)."""
+    if isinstance(data, dict):
+        qs = data.get("questions", [])
+        if isinstance(qs, list):
+            return _validate_questions(qs)
+    elif isinstance(data, list):
+        return _validate_questions(data)
+    return []
 
 
 def _parse_questions(raw: str) -> list[dict[str, Any]]:
@@ -184,25 +203,37 @@ def _parse_questions(raw: str) -> list[dict[str, Any]]:
                 raw = part
                 break
 
-    # Try direct parse first, then fallback to extracting the first {...} block
-    for candidate in [raw]:
-        try:
-            data = json.loads(candidate)
-            qs = data.get("questions", [])
-            if isinstance(qs, list):
-                return _validate_questions(qs)
-        except json.JSONDecodeError:
-            pass
+    # Try direct parse
+    cleaned = _clean_json(raw)
+    try:
+        data = json.loads(cleaned)
+        qs = _extract_questions(data)
+        if qs:
+            return qs
+    except json.JSONDecodeError:
+        pass
 
-    # Fallback: extract the first JSON object from the text
+    # Fallback: extract the first JSON object {...}
     start = raw.find("{")
     end = raw.rfind("}")
     if start != -1 and end > start:
         try:
-            data = json.loads(raw[start:end + 1])
-            qs = data.get("questions", [])
-            if isinstance(qs, list):
-                return _validate_questions(qs)
+            data = json.loads(_clean_json(raw[start:end + 1]))
+            qs = _extract_questions(data)
+            if qs:
+                return qs
+        except json.JSONDecodeError:
+            pass
+
+    # Fallback: extract the first JSON array [...]
+    start = raw.find("[")
+    end = raw.rfind("]")
+    if start != -1 and end > start:
+        try:
+            data = json.loads(_clean_json(raw[start:end + 1]))
+            qs = _extract_questions(data)
+            if qs:
+                return qs
         except json.JSONDecodeError:
             pass
 
@@ -230,20 +261,25 @@ def _validate_questions(qs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 class QuizGenBody(BaseModel):
-    chapter_id: str
+    chapter_id: str = ""
     subject_id: str
     num_questions: int = 10
 
 
 @app.post("/api/quiz/generate")
 async def quiz_generate(body: QuizGenBody) -> dict[str, Any]:
-    """Génère un QCM via RAG + Ollama en batches de 10 questions max."""
+    """Génère un QCM via RAG + Ollama en batches de 5 questions max."""
     num = max(1, min(body.num_questions, 50))  # cap at 50
 
+    query_text = (
+        f"notions importantes cours chapitre {body.chapter_id}"
+        if body.chapter_id
+        else f"notions importantes cours matière {body.subject_id}"
+    )
     rq = rag.query_courses(
-        f"notions importantes cours chapitre {body.chapter_id}",
-        n_results=12,
-        chapter_id=body.chapter_id,
+        query_text,
+        n_results=20 if not body.chapter_id else 12,
+        chapter_id=body.chapter_id or None,
         subject_id=body.subject_id,
     )
     ctx = ollama.format_rag_context(rq)
@@ -284,6 +320,7 @@ correct est l'index (0, 1, 2 ou 3) de la bonne réponse. Les options doivent êt
                 prompt,
                 system="Tu écris du JSON strict sans markdown. Pas de commentaire, pas de markdown.",
                 temperature=0.4,
+                force_json=True,
             )
             batch = _parse_questions(raw)
             if batch:
@@ -301,7 +338,7 @@ correct est l'index (0, 1, 2 ou 3) de la bonne réponse. Les options doivent êt
 
 
 class QuizGradeBody(BaseModel):
-    chapter_id: str
+    chapter_id: str = ""
     answers: dict[str, int] = Field(default_factory=dict)
     questions: list[dict[str, Any]]
 
@@ -315,7 +352,8 @@ def quiz_grade(body: QuizGradeBody) -> dict[str, Any]:
         if int(body.answers.get(key, -1)) == int(q.get("correct", -2)):
             correct += 1
     score = correct / total if total else 0.0
-    store.record_quiz_attempt(body.chapter_id, float(correct), total)
+    label = body.chapter_id or "all-chapters"
+    store.record_quiz_attempt(label, float(correct), total)
     return {"correct": correct, "total": total, "score": score}
 
 
