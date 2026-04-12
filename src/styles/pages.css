@@ -213,6 +213,15 @@
   color: var(--noir-100);
 }
 
+/* Inline markdown (quiz questions/options) — strip block margins */
+.md-content--inline p {
+  margin: 0;
+  display: inline;
+}
+.md-content--inline > * {
+  display: inline;
+}
+
 /* ── Assistant / chat area ─────────────────────────── */
 .assistant-section {
   margin-top: var(--sp-8);

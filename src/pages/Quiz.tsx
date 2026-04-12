@@ -10,6 +10,10 @@ import {
   Loader2,
   Square,
 } from "lucide-react";
+import Markdown from "react-markdown";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
 import { api } from "../api";
 import { Card } from "../components/Card";
 import { Button } from "../components/Button";
@@ -369,7 +373,9 @@ export function Quiz() {
           <div className="quiz-question__number">
             Question {i + 1} sur {questions.length}
           </div>
-          <div className="quiz-question__text">{q.q}</div>
+          <div className="quiz-question__text md-content md-content--inline">
+            <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{q.q}</Markdown>
+          </div>
           {q.options?.map((opt, j) => (
             <div
               key={j}
@@ -400,7 +406,9 @@ export function Quiz() {
                 </span>
               )}
               <span className="quiz-option__letter">{LETTERS[j]}</span>
-              <span>{opt}</span>
+              <span className="md-content md-content--inline">
+                <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{opt}</Markdown>
+              </span>
             </div>
           ))}
         </Card>
