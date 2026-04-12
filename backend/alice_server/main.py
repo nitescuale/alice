@@ -261,20 +261,31 @@ def _validate_questions(qs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 async def _dedup_questions(qs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Use the LLM to identify and remove duplicate/near-duplicate questions."""
-    numbered = "\n".join(f"{i}: {q['q']}" for i, q in enumerate(qs))
-    prompt = f"""Voici une liste de questions numérotées :
+    """Use the LLM to identify and remove duplicate/near-duplicate questions.
+
+    Two questions are duplicates if they test the SAME concept, even when worded
+    differently (e.g. "Qu'est-ce que le CC ?" vs "Que représente le CC ?").
+    """
+    numbered = "\n".join(
+        f"{i}: {q['q']}" for i, q in enumerate(qs)
+    )
+    prompt = f"""Voici {len(qs)} questions numérotées d'un QCM :
 {numbered}
 
-Certaines questions portent sur le même sujet ou concept. Pour chaque groupe de doublons, garde UNIQUEMENT la question la plus détaillée et complète.
-Réponds avec un JSON contenant la liste des indices à SUPPRIMER (les moins bonnes copies).
-Exemple : {{"remove": [3, 7, 12]}}
-Si aucun doublon, réponds : {{"remove": []}}"""
+Ta tâche : trouver les questions qui portent sur LE MÊME concept ou la même notion, même si la formulation est différente.
+Deux questions sont des doublons si elles testent la même connaissance. Exemples :
+- "Qu'est-ce que le coefficient de clustering ?" et "Que représente le CC dans un réseau ?" → doublons
+- "Quelle est la définition de X ?" et "Comment définit-on X ?" → doublons
+
+Pour chaque groupe de doublons, garde UNIQUEMENT la question la plus détaillée et complète (celle avec le plus d'informations dans l'énoncé).
+Renvoie les indices des questions à SUPPRIMER.
+{{"remove": [3, 7, 12]}}
+Si aucun doublon : {{"remove": []}}"""
 
     try:
         raw = await ollama.generate(
             prompt,
-            system="Tu écris du JSON strict. Juste le JSON, rien d'autre.",
+            system="Analyse les questions et identifie les doublons sémantiques. Réponds UNIQUEMENT avec du JSON strict.",
             temperature=0.1,
             force_json=True,
         )
@@ -327,13 +338,18 @@ async def quiz_generate(body: QuizGenBody) -> dict[str, Any]:
         already = ""
         if all_questions:
             prev_texts = "\n".join(f"- {q['q']}" for q in all_questions[:20])
-            already = f"\nQuestions déjà générées (ne pas répéter) :\n{prev_texts}\n"
+            already = (
+                f"\n⚠️ QUESTIONS DÉJÀ GÉNÉRÉES — NE PAS répéter ni reformuler ces concepts :\n"
+                f"{prev_texts}\n"
+                f"Chaque nouvelle question DOIT porter sur un concept DIFFÉRENT de ceux ci-dessus.\n"
+            )
 
         prompt = f"""Voici le contenu du cours sur lequel tu dois te baser EXCLUSIVEMENT :
 
 {ctx}
 {already}
 À partir de CE CONTENU UNIQUEMENT, génère exactement {batch_n} questions à choix multiples.
+Chaque question doit porter sur un concept ou une notion DIFFÉRENTE. INTERDIT de poser deux questions sur le même sujet.
 Chaque question doit avoir EXACTEMENT 4 propositions (pas plus, pas moins), dont une seule est correcte.
 INTERDIT de poser des questions qui ne sont pas directement liées au contenu ci-dessus.
 Réponds UNIQUEMENT avec un JSON valide, sans texte avant ni après, de ce schéma :
@@ -362,7 +378,7 @@ correct est l'index (0, 1, 2 ou 3) de la bonne réponse. Les options doivent êt
         remaining -= batch_n
 
     # Deduplicate questions that cover the same concept
-    if len(all_questions) > 5:
+    if len(all_questions) > 3:
         all_questions = await _dedup_questions(all_questions)
 
     return {"questions": all_questions}
