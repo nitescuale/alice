@@ -4,7 +4,6 @@ import {
   AlertCircle,
   Clock,
   Trophy,
-  Wand2,
   CheckCircle2,
   XCircle,
   Loader2,
@@ -289,7 +288,7 @@ export function Quiz() {
         <div style={{ alignSelf: "flex-end" }}>
           <Button
             variant="primary"
-            icon={loading ? <Loader2 size={14} className="spin" /> : <Wand2 size={14} />}
+            icon={loading ? <Loader2 size={14} className="spin" /> : undefined}
             disabled={loading || !chapterId}
             loading={loading}
             onClick={generate}
