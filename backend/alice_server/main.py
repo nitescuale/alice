@@ -166,7 +166,8 @@ Réponds en français de façon claire et structurée. Base-toi sur le contexte;
     return {"answer": text}
 
 
-_BATCH_SIZE = 10  # questions per LLM call
+_BATCH_SIZE = 5  # questions per LLM call — local models struggle with more
+_MAX_RETRIES = 2  # retry on JSON parse failure
 
 
 def _parse_questions(raw: str) -> list[dict[str, Any]]:
@@ -276,16 +277,21 @@ Réponds UNIQUEMENT avec un JSON valide, sans texte avant ni après, de ce sché
 {{"questions":[{{"q":"Quelle est la définition de X ?","options":["Première réponse possible","Deuxième réponse possible","Troisième réponse possible","Quatrième réponse possible"],"correct":0}}]}}
 correct est l'index (0, 1, 2 ou 3) de la bonne réponse. Les options doivent être des phrases complètes, pas des lettres. Questions en français."""
 
-        raw = await ollama.generate(
-            prompt,
-            system="Tu écris du JSON strict sans markdown.",
-            temperature=0.4,
-        )
-        batch = _parse_questions(raw)
+        batch: list[dict[str, Any]] = []
+        raw = ""
+        for _attempt in range(_MAX_RETRIES):
+            raw = await ollama.generate(
+                prompt,
+                system="Tu écris du JSON strict sans markdown. Pas de commentaire, pas de markdown.",
+                temperature=0.4,
+            )
+            batch = _parse_questions(raw)
+            if batch:
+                break
+
         if batch:
             all_questions.extend(batch[:batch_n])
         else:
-            # If the LLM failed to produce valid JSON, stop batching
             if not all_questions:
                 return {"questions": [], "raw": raw}
             break
