@@ -175,7 +175,6 @@ def _parse_questions(raw: str) -> list[dict[str, Any]]:
     # Strip markdown code fences if present
     if "```" in raw:
         parts = raw.split("```")
-        # pick the first non-empty block after the opening fence
         for part in parts[1:]:
             part = part.strip()
             if part.startswith("json"):
@@ -183,14 +182,50 @@ def _parse_questions(raw: str) -> list[dict[str, Any]]:
             if part:
                 raw = part
                 break
-    try:
-        data = json.loads(raw)
-        qs = data.get("questions", [])
-        if isinstance(qs, list):
-            return qs
-    except json.JSONDecodeError:
-        pass
+
+    # Try direct parse first, then fallback to extracting the first {...} block
+    for candidate in [raw]:
+        try:
+            data = json.loads(candidate)
+            qs = data.get("questions", [])
+            if isinstance(qs, list):
+                return _validate_questions(qs)
+        except json.JSONDecodeError:
+            pass
+
+    # Fallback: extract the first JSON object from the text
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start != -1 and end > start:
+        try:
+            data = json.loads(raw[start:end + 1])
+            qs = data.get("questions", [])
+            if isinstance(qs, list):
+                return _validate_questions(qs)
+        except json.JSONDecodeError:
+            pass
+
     return []
+
+
+def _validate_questions(qs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Filter out malformed questions: must have 4 non-trivial options."""
+    valid = []
+    for q in qs:
+        opts = q.get("options", [])
+        question_text = q.get("q", "")
+        correct = q.get("correct", 0)
+        if not question_text or not isinstance(opts, list):
+            continue
+        # Filter options that are single letters or empty
+        real_opts = [o for o in opts if isinstance(o, str) and len(o.strip()) > 1]
+        if len(real_opts) < 4:
+            continue
+        # Keep only the first 4 options
+        q["options"] = real_opts[:4]
+        q["correct"] = min(int(correct), 3)
+        valid.append(q)
+    return valid
 
 
 class QuizGenBody(BaseModel):
@@ -234,11 +269,12 @@ async def quiz_generate(body: QuizGenBody) -> dict[str, Any]:
 
 {ctx}
 {already}
-À partir de CE CONTENU UNIQUEMENT, génère exactement {batch_n} questions à choix multiples (4 propositions, une seule bonne).
+À partir de CE CONTENU UNIQUEMENT, génère exactement {batch_n} questions à choix multiples.
+Chaque question doit avoir EXACTEMENT 4 propositions (pas plus, pas moins), dont une seule est correcte.
 INTERDIT de poser des questions qui ne sont pas directement liées au contenu ci-dessus.
-Réponds UNIQUEMENT avec un JSON valide de ce schéma :
-{{"questions":[{{"q":"...","options":["a","b","c","d"],"correct":0}}]}}
-correct est l'index 0-3 de la bonne réponse. Questions en français."""
+Réponds UNIQUEMENT avec un JSON valide, sans texte avant ni après, de ce schéma :
+{{"questions":[{{"q":"Quelle est la définition de X ?","options":["Première réponse possible","Deuxième réponse possible","Troisième réponse possible","Quatrième réponse possible"],"correct":0}}]}}
+correct est l'index (0, 1, 2 ou 3) de la bonne réponse. Les options doivent être des phrases complètes, pas des lettres. Questions en français."""
 
         raw = await ollama.generate(
             prompt,
