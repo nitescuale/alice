@@ -306,22 +306,60 @@ class QuizGenBody(BaseModel):
 
 @app.post("/api/quiz/generate")
 async def quiz_generate(body: QuizGenBody) -> dict[str, Any]:
-    """Génère un QCM via RAG + Ollama en batches de 5 questions max."""
-    num = max(1, min(body.num_questions, 50))  # cap at 50
+    """Échantillonne un QCM depuis la banque pré-générée (instantané, sans LLM)."""
+    num = max(1, min(body.num_questions, 50))
+    chapter_id = body.chapter_id or None
+    result = store.sample_bank(body.subject_id, chapter_id, num)
+    if not result:
+        raise HTTPException(
+            status_code=422,
+            detail="Aucune banque de questions pour ce chapitre. Générez-la d'abord depuis la page Cours ou Quiz.",
+        )
+    return {"questions": result}
 
-    query_text = (
-        f"notions importantes cours chapitre {body.chapter_id}"
-        if body.chapter_id
-        else f"notions importantes cours matière {body.subject_id}"
-    )
+
+# ---------------------------------------------------------------------------
+# Question bank management
+# ---------------------------------------------------------------------------
+
+_BANK_HARD_CAP = 50
+_BANK_MAX_BATCHES = 12
+_BANK_MIN_NEW_PER_BATCH = 2
+
+
+class QuestionsGenBody(BaseModel):
+    subject_id: str
+    chapter_id: str
+    force: bool = False
+
+
+@app.post("/api/questions/generate")
+async def questions_generate(body: QuestionsGenBody) -> dict[str, Any]:
+    """Generate an exhaustive question bank for a chapter, persist in SQLite.
+
+    If a bank already exists and `force=False`, returns the existing bank without
+    regenerating. Otherwise runs batched generation against RAG context until a
+    saturation condition is met (cap reached, too few new uniques, or max batches).
+    """
+    existing = store.bank_count(body.subject_id, body.chapter_id)
+    if not body.force and existing > 0:
+        return {
+            "subject_id": body.subject_id,
+            "chapter_id": body.chapter_id,
+            "count": existing,
+            "questions": store.list_bank(body.subject_id, body.chapter_id),
+        }
+
+    if body.force:
+        store.clear_bank(body.subject_id, body.chapter_id)
+
     rq = rag.query_courses(
-        query_text,
-        n_results=20 if not body.chapter_id else 12,
-        chapter_id=body.chapter_id or None,
+        f"notions importantes cours chapitre {body.chapter_id}",
+        n_results=15,
+        chapter_id=body.chapter_id,
         subject_id=body.subject_id,
     )
     ctx = ollama.format_rag_context(rq)
-
     if not ctx.strip():
         raise HTTPException(
             status_code=422,
@@ -329,15 +367,18 @@ async def quiz_generate(body: QuizGenBody) -> dict[str, Any]:
         )
 
     all_questions: list[dict[str, Any]] = []
-    remaining = num
+    batches_done = 0
 
-    while remaining > 0:
-        batch_n = min(remaining, _BATCH_SIZE)
-        # Build a seed of already-generated question texts so the model avoids
-        # duplicates across batches.
+    while (
+        len(all_questions) < _BANK_HARD_CAP
+        and batches_done < _BANK_MAX_BATCHES
+    ):
+        before = len(all_questions)
+        batch_n = _BATCH_SIZE
+
         already = ""
         if all_questions:
-            prev_texts = "\n".join(f"- {q['q']}" for q in all_questions[:20])
+            prev_texts = "\n".join(f"- {q['q']}" for q in all_questions)
             already = (
                 f"\n⚠️ QUESTIONS DÉJÀ GÉNÉRÉES — NE PAS répéter ni reformuler ces concepts :\n"
                 f"{prev_texts}\n"
@@ -357,31 +398,80 @@ Réponds UNIQUEMENT avec un JSON valide, sans texte avant ni après, de ce sché
 correct est l'index (0, 1, 2 ou 3) de la bonne réponse. Les options doivent être des phrases complètes, pas des lettres. Questions en français."""
 
         batch: list[dict[str, Any]] = []
-        raw = ""
         for _attempt in range(_MAX_RETRIES):
             raw = await ollama.generate(
                 prompt,
                 system="Tu écris du JSON strict sans markdown. Pas de commentaire, pas de markdown.",
-                temperature=0.4,
+                temperature=0.5,
                 force_json=True,
             )
             batch = _parse_questions(raw)
             if batch:
                 break
 
-        if batch:
-            all_questions.extend(batch[:batch_n])
-        else:
-            if not all_questions:
-                return {"questions": [], "raw": raw}
+        batches_done += 1
+
+        if not batch:
+            # Nothing parsed this round — stop to avoid hammering
             break
-        remaining -= batch_n
 
-    # Deduplicate questions that cover the same concept
-    if len(all_questions) > 3:
-        all_questions = await _dedup_questions(all_questions)
+        all_questions.extend(batch)
 
-    return {"questions": all_questions}
+        # Dedupe cumulative list (LLM semantic dedup)
+        if len(all_questions) > 3:
+            all_questions = await _dedup_questions(all_questions)
+
+        # Enforce hard cap post-dedup
+        if len(all_questions) > _BANK_HARD_CAP:
+            all_questions = all_questions[:_BANK_HARD_CAP]
+
+        new_unique = len(all_questions) - before
+        if new_unique < _BANK_MIN_NEW_PER_BATCH:
+            break
+
+    if not all_questions:
+        raise HTTPException(
+            status_code=502,
+            detail="Échec de génération de questions (aucune question exploitable parsée).",
+        )
+
+    store.insert_questions(body.subject_id, body.chapter_id, all_questions)
+
+    return {
+        "subject_id": body.subject_id,
+        "chapter_id": body.chapter_id,
+        "count": len(all_questions),
+        "questions": all_questions,
+    }
+
+
+@app.get("/api/questions/bank")
+def questions_bank(subject_id: str, chapter_id: str) -> dict[str, Any]:
+    count = store.bank_count(subject_id, chapter_id)
+    return {
+        "subject_id": subject_id,
+        "chapter_id": chapter_id,
+        "count": count,
+        "has_bank": count > 0,
+    }
+
+
+@app.get("/api/questions/banks")
+def questions_banks(subject_id: str) -> dict[str, Any]:
+    chapters = store.banks_summary(subject_id)
+    total = sum(int(c.get("count", 0)) for c in chapters)
+    return {"subject_id": subject_id, "chapters": chapters, "total": total}
+
+
+class QuestionsBankDeleteBody(BaseModel):
+    subject_id: str
+    chapter_id: str
+
+
+@app.delete("/api/questions/bank")
+def questions_bank_delete(body: QuestionsBankDeleteBody) -> dict[str, bool]:
+    store.clear_bank(body.subject_id, body.chapter_id)
+    return {"ok": True}
 
 
 class QuizGradeBody(BaseModel):

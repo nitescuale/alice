@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -34,6 +35,16 @@ def init_db() -> None:
                 notes TEXT,
                 created_at TEXT
             );
+            CREATE TABLE IF NOT EXISTS question_bank (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subject_id TEXT NOT NULL,
+                chapter_id TEXT NOT NULL,
+                q TEXT NOT NULL,
+                options TEXT NOT NULL,
+                correct INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_qb_chapter ON question_bank(subject_id, chapter_id);
             """
         )
 
@@ -90,3 +101,113 @@ def chapter_history() -> list[dict[str, Any]]:
             "SELECT chapter_id, last_read_at AS completed_at, visits FROM chapter_progress ORDER BY last_read_at DESC LIMIT 200"
         )
         return [dict(r) for r in cur.fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# Question bank
+# ---------------------------------------------------------------------------
+
+def insert_questions(
+    subject_id: str, chapter_id: str, questions: list[dict[str, Any]]
+) -> int:
+    """Bulk insert questions into the bank. Returns the number of rows inserted."""
+    if not questions:
+        return 0
+    now = datetime.utcnow().isoformat()
+    rows = []
+    for q in questions:
+        opts = q.get("options", [])
+        rows.append(
+            (
+                subject_id,
+                chapter_id,
+                str(q.get("q", "")),
+                json.dumps(opts, ensure_ascii=False),
+                int(q.get("correct", 0)),
+                now,
+            )
+        )
+    with get_conn() as conn:
+        conn.executemany(
+            "INSERT INTO question_bank (subject_id, chapter_id, q, options, correct, created_at) "
+            "VALUES (?,?,?,?,?,?)",
+            rows,
+        )
+    return len(rows)
+
+
+def clear_bank(subject_id: str, chapter_id: str) -> None:
+    """Delete all bank rows for a given (subject, chapter)."""
+    with get_conn() as conn:
+        conn.execute(
+            "DELETE FROM question_bank WHERE subject_id = ? AND chapter_id = ?",
+            (subject_id, chapter_id),
+        )
+
+
+def bank_count(subject_id: str, chapter_id: str) -> int:
+    """Count questions stored in the bank for a chapter."""
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT COUNT(*) AS n FROM question_bank WHERE subject_id = ? AND chapter_id = ?",
+            (subject_id, chapter_id),
+        )
+        row = cur.fetchone()
+        return int(row["n"]) if row else 0
+
+
+def _row_to_question(row: sqlite3.Row) -> dict[str, Any]:
+    try:
+        opts = json.loads(row["options"])
+    except (TypeError, json.JSONDecodeError):
+        opts = []
+    return {
+        "q": row["q"],
+        "options": opts if isinstance(opts, list) else [],
+        "correct": int(row["correct"]),
+    }
+
+
+def list_bank(subject_id: str, chapter_id: str) -> list[dict[str, Any]]:
+    """Return all bank rows for a chapter as {q, options, correct} dicts."""
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT q, options, correct FROM question_bank "
+            "WHERE subject_id = ? AND chapter_id = ? ORDER BY id ASC",
+            (subject_id, chapter_id),
+        )
+        return [_row_to_question(r) for r in cur.fetchall()]
+
+
+def sample_bank(
+    subject_id: str, chapter_id: str | None, n: int
+) -> list[dict[str, Any]]:
+    """Random sample of `n` questions. If chapter_id is None, sample across the subject."""
+    n = max(0, int(n))
+    if n == 0:
+        return []
+    with get_conn() as conn:
+        if chapter_id:
+            cur = conn.execute(
+                "SELECT q, options, correct FROM question_bank "
+                "WHERE subject_id = ? AND chapter_id = ? ORDER BY RANDOM() LIMIT ?",
+                (subject_id, chapter_id, n),
+            )
+        else:
+            cur = conn.execute(
+                "SELECT q, options, correct FROM question_bank "
+                "WHERE subject_id = ? ORDER BY RANDOM() LIMIT ?",
+                (subject_id, n),
+            )
+        return [_row_to_question(r) for r in cur.fetchall()]
+
+
+def banks_summary(subject_id: str) -> list[dict[str, Any]]:
+    """Return [{chapter_id, count}] for all chapters of a subject that have banks."""
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT chapter_id, COUNT(*) AS count FROM question_bank "
+            "WHERE subject_id = ? GROUP BY chapter_id ORDER BY chapter_id ASC",
+            (subject_id,),
+        )
+        return [{"chapter_id": r["chapter_id"], "count": int(r["count"])} for r in cur.fetchall()]

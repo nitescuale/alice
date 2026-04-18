@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Brain,
   AlertCircle,
@@ -8,6 +8,9 @@ import {
   XCircle,
   Loader2,
   Square,
+  Database,
+  RefreshCw,
+  Sparkles,
 } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkMath from "remark-math";
@@ -18,6 +21,7 @@ import { Card } from "../components/Card";
 import { Button } from "../components/Button";
 import { Select } from "../components/Select";
 import { Badge } from "../components/Badge";
+import { Input } from "../components/Input";
 import { ProgressRing } from "../components/ProgressRing";
 
 type Chapter = { id: string; title: string };
@@ -25,8 +29,22 @@ type Subject = { id: string; title: string; chapters: Chapter[] };
 
 type QItem = { q: string; options: string[]; correct: number };
 
+type BankStatus = {
+  subject_id: string;
+  chapter_id: string;
+  count: number;
+  has_bank: boolean;
+};
+
+type BanksSummary = {
+  subject_id: string;
+  chapters: { chapter_id: string; count: number }[];
+  total: number;
+};
+
 /* ---- Module-level state: survives component unmount/remount ---- */
-let _genPromise: Promise<{ questions?: QItem[]; raw?: string }> | null = null;
+/** _genPromise now tracks the SLOW bank-generation call (not the fast quiz sampling). */
+let _genPromise: Promise<unknown> | null = null;
 let _genLoadingMsg = "";
 let _genAbort: AbortController | null = null;
 let _stash: {
@@ -38,18 +56,11 @@ let _stash: {
 
 const LETTERS = ["A", "B", "C", "D", "E", "F"];
 
-const NUM_QUESTION_OPTIONS = [
-  { value: "5", label: "5 questions" },
-  { value: "10", label: "10 questions" },
-  { value: "20", label: "20 questions" },
-  { value: "30", label: "30 questions" },
-];
-
 export function Quiz() {
   const [tax, setTax] = useState<{ subjects: Subject[] } | null>(null);
-  const [subjectId, setSubjectId] = useState("");
-  const [chapterId, setChapterId] = useState("");
-  const [numQuestions, setNumQuestions] = useState("10");
+  const [subjectId, setSubjectId] = useState(() => _stash?.filters.subjectId ?? "");
+  const [chapterId, setChapterId] = useState(() => _stash?.filters.chapterId ?? "");
+  const [numQuestions, setNumQuestions] = useState(() => _stash?.filters.numQuestions ?? "10");
   const [questions, setQuestions] = useState<QItem[]>(() => _stash?.questions ?? []);
   const [answers, setAnswers] = useState<Record<string, number>>(() => _stash?.answers ?? {});
   const [result, setResult] = useState<{
@@ -58,33 +69,35 @@ export function Quiz() {
     score: number;
   } | null>(() => _stash?.result ?? null);
   const [history, setHistory] = useState<Record<string, unknown>[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [loadingMsg, setLoadingMsg] = useState("");
+
+  /* Quiz sampling (fast) */
+  const [quizLoading, setQuizLoading] = useState(false);
   const [err, setErr] = useState("");
 
-  /* Pick up a pending generation that started before navigation */
+  /* Bank status */
+  const [bankStatus, setBankStatus] = useState<BankStatus | null>(null);
+  const [banksSummary, setBanksSummary] = useState<BanksSummary | null>(null);
+  const [bankStatusLoading, setBankStatusLoading] = useState(false);
+
+  /* Bank generation (slow) */
+  const [bankGenLoading, setBankGenLoading] = useState(false);
+  const [bankGenMsg, setBankGenMsg] = useState("");
+
+  /* Pick up a pending BANK generation that started before navigation */
   useEffect(() => {
     if (_genPromise) {
-      setLoading(true);
-      setLoadingMsg(_genLoadingMsg);
+      setBankGenLoading(true);
+      setBankGenMsg(_genLoadingMsg);
       _genPromise
-        .then((data) => {
-          const qs = data.questions ?? [];
-          setQuestions(qs);
-          if (_stash) {
-            _stash.questions = qs;
-            _stash.answers = {};
-            _stash.result = null;
-          }
-          if (!qs.length && data.raw) {
-            setErr("Reponse LLM non JSON : verifiez Ollama / le modele.");
-          }
+        .catch((e) => {
+          if (_genAbort?.signal.aborted) return;
+          setErr(String(e));
         })
-        .catch((e) => setErr(String(e)))
         .finally(() => {
           _genPromise = null;
-          setLoading(false);
-          setLoadingMsg("");
+          _genAbort = null;
+          setBankGenLoading(false);
+          setBankGenMsg("");
         });
     }
   }, []);
@@ -127,50 +140,165 @@ export function Quiz() {
     return [{ id: "", title: "Tous les chapitres" }, ...raw];
   }, [tax, subjectId]);
 
-  const answeredCount = Object.keys(answers).length;
-  const progress =
-    questions.length > 0 ? (answeredCount / questions.length) * 100 : 0;
+  const isAllChapters = chapterId === "";
 
+  /* Load bank status when subject/chapter changes */
+  const loadBankStatus = useCallback(async () => {
+    if (!subjectId) {
+      setBankStatus(null);
+      setBanksSummary(null);
+      return;
+    }
+    setBankStatusLoading(true);
+    try {
+      if (isAllChapters) {
+        const s = await api<BanksSummary>(
+          `/api/questions/banks?subject_id=${encodeURIComponent(subjectId)}`,
+        );
+        setBanksSummary(s);
+        setBankStatus(null);
+      } else {
+        const b = await api<BankStatus>(
+          `/api/questions/bank?subject_id=${encodeURIComponent(subjectId)}&chapter_id=${encodeURIComponent(chapterId)}`,
+        );
+        setBankStatus(b);
+        setBanksSummary(null);
+      }
+    } catch (e) {
+      setErr(String(e));
+      setBankStatus(null);
+      setBanksSummary(null);
+    } finally {
+      setBankStatusLoading(false);
+    }
+  }, [subjectId, chapterId, isAllChapters]);
+
+  useEffect(() => {
+    loadBankStatus();
+  }, [loadBankStatus]);
+
+  /* Available question count for current selection */
+  const availableCount = useMemo(() => {
+    if (isAllChapters) return banksSummary?.total ?? 0;
+    return bankStatus?.count ?? 0;
+  }, [isAllChapters, banksSummary, bankStatus]);
+
+  /* Keep numQuestions within [1, availableCount] and default to min(10, count) on selection change */
+  useEffect(() => {
+    if (availableCount <= 0) return;
+    const current = parseInt(numQuestions, 10);
+    if (!current || current < 1) {
+      setNumQuestions(String(Math.min(10, availableCount)));
+    } else if (current > availableCount) {
+      setNumQuestions(String(availableCount));
+    }
+  }, [availableCount]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ---------- Bank generation (SLOW) ---------- */
+  async function generateBank(force = false) {
+    if (!subjectId) return;
+    if (force) {
+      const ok = window.confirm(
+        "Regenerer la banque ? Les questions existantes seront remplacees.",
+      );
+      if (!ok) return;
+    }
+    setErr("");
+
+    const abort = new AbortController();
+    _genAbort = abort;
+    setBankGenLoading(true);
+
+    try {
+      if (isAllChapters) {
+        const subj = tax?.subjects.find((s) => s.id === subjectId);
+        const chs = subj?.chapters ?? [];
+        const total = chs.length;
+        for (let i = 0; i < chs.length; i++) {
+          if (abort.signal.aborted) return;
+          const ch = chs[i];
+          const msg = `Chapitre ${i + 1}/${total} - Generation exhaustive de la banque (1-3 min)...`;
+          setBankGenMsg(msg);
+          _genLoadingMsg = msg;
+          const p = api<{ count: number }>("/api/questions/generate", {
+            method: "POST",
+            body: JSON.stringify({
+              subject_id: subjectId,
+              chapter_id: ch.id,
+              force,
+            }),
+            signal: abort.signal,
+          });
+          _genPromise = p;
+          await p;
+        }
+      } else {
+        const msg = "Generation exhaustive de la banque de questions (1-3 min)...";
+        setBankGenMsg(msg);
+        _genLoadingMsg = msg;
+        const p = api<{ count: number }>("/api/questions/generate", {
+          method: "POST",
+          body: JSON.stringify({
+            subject_id: subjectId,
+            chapter_id: chapterId,
+            force,
+          }),
+          signal: abort.signal,
+        });
+        _genPromise = p;
+        await p;
+      }
+      await loadBankStatus();
+    } catch (e) {
+      if (abort.signal.aborted) return;
+      setErr(String(e));
+    } finally {
+      _genPromise = null;
+      _genAbort = null;
+      setBankGenLoading(false);
+      setBankGenMsg("");
+    }
+  }
+
+  function cancelBankGeneration() {
+    if (_genAbort) {
+      _genAbort.abort();
+      _genAbort = null;
+    }
+    _genPromise = null;
+    setBankGenLoading(false);
+    setBankGenMsg("");
+  }
+
+  /* ---------- Quiz sampling (FAST) ---------- */
   async function generate() {
     if (!subjectId) return;
+    if (availableCount <= 0) return;
     setErr("");
-    setLoading(true);
+    setQuizLoading(true);
     setResult(null);
     setAnswers({});
     setQuestions([]);
 
-    const n = parseInt(numQuestions, 10) || 10;
-    const batchCount = Math.ceil(n / 5);
-    if (batchCount > 1) {
-      setLoadingMsg(`Generation du quiz (${n} questions en ${batchCount} batches)...`);
-    } else {
-      setLoadingMsg("Generation du quiz...");
-    }
-
-    const abort = new AbortController();
-    _genAbort = abort;
-
-    const promise = api<{ questions?: QItem[]; raw?: string }>(
-      "/api/quiz/generate",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          chapter_id: chapterId,
-          subject_id: subjectId,
-          num_questions: n,
-        }),
-        signal: abort.signal,
-      }
+    const n = Math.max(
+      1,
+      Math.min(availableCount, parseInt(numQuestions, 10) || 10),
     );
-    _genPromise = promise;
-    _genLoadingMsg = batchCount > 1
-      ? `Generation du quiz (${n} questions en ${batchCount} batches)...`
-      : "Generation du quiz...";
 
-    const filters = { subjectId, chapterId, numQuestions };
+    const filters = { subjectId, chapterId, numQuestions: String(n) };
 
     try {
-      const data = await promise;
+      const data = await api<{ questions?: QItem[]; raw?: string }>(
+        "/api/quiz/generate",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            chapter_id: chapterId,
+            subject_id: subjectId,
+            num_questions: n,
+          }),
+        },
+      );
       const qs = data.questions ?? [];
       setQuestions(qs);
       _stash = { questions: qs, answers: {}, result: null, filters };
@@ -178,24 +306,10 @@ export function Quiz() {
         setErr("Reponse LLM non JSON : verifiez Ollama / le modele.");
       }
     } catch (e) {
-      if (abort.signal.aborted) return;
       setErr(String(e));
     } finally {
-      _genPromise = null;
-      _genAbort = null;
-      setLoading(false);
-      setLoadingMsg("");
+      setQuizLoading(false);
     }
-  }
-
-  function cancelGeneration() {
-    if (_genAbort) {
-      _genAbort.abort();
-      _genAbort = null;
-    }
-    _genPromise = null;
-    setLoading(false);
-    setLoadingMsg("");
   }
 
   async function grade() {
@@ -233,13 +347,21 @@ export function Quiz() {
     return base;
   }
 
+  const answeredCount = Object.keys(answers).length;
+  const progress =
+    questions.length > 0 ? (answeredCount / questions.length) * 100 : 0;
+
+  const parsedNum = parseInt(numQuestions, 10);
+  const numValid = !!parsedNum && parsedNum >= 1 && parsedNum <= availableCount;
+  const canQuiz = !!subjectId && availableCount > 0 && numValid && !quizLoading && !bankGenLoading;
+
   return (
     <div>
       <div className="page-header">
         <h1 className="page-header__title">Quiz</h1>
         <p className="page-header__subtitle">
-          Generation de QCM via RAG + Ollama. Choisissez un chapitre et testez
-          vos connaissances.
+          Banque de questions pre-generee via RAG + Ollama. Generez la banque
+          une fois, puis echantillonnez instantanement.
         </p>
       </div>
 
@@ -272,34 +394,124 @@ export function Quiz() {
           value={chapterId}
           onChange={(e) => setChapterId(e.target.value)}
         />
-        <Select
-          label="Nombre de questions"
-          options={NUM_QUESTION_OPTIONS}
+        <Input
+          label={`Nombre de questions${availableCount > 0 ? ` (max ${availableCount})` : ""}`}
+          type="number"
+          min={1}
+          max={availableCount > 0 ? availableCount : undefined}
           value={numQuestions}
+          disabled={availableCount <= 0}
           onChange={(e) => setNumQuestions(e.target.value)}
         />
         <div style={{ alignSelf: "flex-end" }}>
           <Button
             variant="primary"
-            icon={loading ? <Loader2 size={14} className="spin" /> : undefined}
-            disabled={loading || !subjectId}
-            loading={loading}
+            icon={quizLoading ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
+            disabled={!canQuiz}
+            loading={quizLoading}
             onClick={generate}
           >
-            {loading ? "Generation..." : "Generer QCM"}
+            {quizLoading ? "Generation..." : "Generer QCM"}
           </Button>
         </div>
       </div>
 
-      {/* Loading indicator */}
-      {loading && (
+      {/* Bank status panel */}
+      {subjectId && !bankGenLoading && (
+        <Card
+          variant="default"
+          padding="md"
+          className="animate-fade-in"
+          style={{ marginBottom: "var(--sp-4)" }}
+        >
+          {bankStatusLoading ? (
+            <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)", color: "var(--noir-400)" }}>
+              <Loader2 size={14} className="spin" />
+              <span>Chargement de la banque...</span>
+            </div>
+          ) : isAllChapters ? (
+            banksSummary && banksSummary.total > 0 ? (
+              <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)", flexWrap: "wrap" }}>
+                <Database size={16} style={{ color: "var(--amber-400)", flexShrink: 0 }} />
+                <span style={{ fontSize: "0.9rem" }}>
+                  Banque : <strong>{banksSummary.total}</strong> questions disponibles sur {banksSummary.chapters.length} chapitre{banksSummary.chapters.length > 1 ? "s" : ""}
+                </span>
+                <div style={{ marginLeft: "auto" }}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon={<RefreshCw size={12} />}
+                    onClick={() => generateBank(true)}
+                  >
+                    Regenerer tout
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)" }}>
+                  <Database size={16} style={{ color: "var(--noir-400)", flexShrink: 0 }} />
+                  <span>Aucune banque de questions pour cette matiere.</span>
+                </div>
+                <div>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    icon={<Sparkles size={14} />}
+                    onClick={() => generateBank(false)}
+                  >
+                    Generer la banque pour tous les chapitres
+                  </Button>
+                </div>
+              </div>
+            )
+          ) : bankStatus && bankStatus.count > 0 ? (
+            <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)", flexWrap: "wrap" }}>
+              <Database size={16} style={{ color: "var(--amber-400)", flexShrink: 0 }} />
+              <span style={{ fontSize: "0.9rem" }}>
+                Banque : <strong>{bankStatus.count}</strong> questions disponibles
+              </span>
+              <div style={{ marginLeft: "auto" }}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={<RefreshCw size={12} />}
+                  onClick={() => generateBank(true)}
+                >
+                  Regenerer
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)" }}>
+                <Database size={16} style={{ color: "var(--noir-400)", flexShrink: 0 }} />
+                <span>Aucune banque de questions pour ce chapitre.</span>
+              </div>
+              <div>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon={<Sparkles size={14} />}
+                  onClick={() => generateBank(false)}
+                >
+                  Generer la banque
+                </Button>
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* Bank generation loading indicator */}
+      {bankGenLoading && (
         <div className="quiz-loading animate-fade-in">
           <Loader2 size={20} className="spin" style={{ color: "var(--amber-400)" }} />
-          <span className="quiz-loading__msg">{loadingMsg}</span>
+          <span className="quiz-loading__msg">{bankGenMsg}</span>
           <span className="quiz-loading__hint">
-            Le modele LLM genere les questions — cela peut prendre quelques instants.
+            Le modele LLM analyse le chapitre et construit la banque — cela peut prendre plusieurs minutes.
           </span>
-          <Button variant="ghost" size="sm" icon={<Square size={12} />} onClick={cancelGeneration}>
+          <Button variant="ghost" size="sm" icon={<Square size={12} />} onClick={cancelBankGeneration}>
             Annuler
           </Button>
         </div>
@@ -345,7 +557,7 @@ export function Quiz() {
               {result.correct > 1 ? "s" : ""} sur {result.total}
             </p>
             <div style={{ display: "flex", gap: "var(--sp-2)", marginTop: "var(--sp-3)" }}>
-              <Button variant="primary" size="sm" onClick={generate}>
+              <Button variant="primary" size="sm" onClick={generate} disabled={!canQuiz}>
                 Nouveau quiz
               </Button>
             </div>
