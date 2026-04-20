@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +15,7 @@ from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from alice_server import ingest, ollama, rag, store
+from alice_server import ingest, notebooklm_gen, ollama, rag, store
 from alice_server.config import (
     OLLAMA_HOST,
     OLLAMA_MODEL,
@@ -812,6 +814,48 @@ async def courses_upload(
             result["index_error"] = str(exc)
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# NotebookLM automated generation (PDF slides -> course markdown)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/notebooklm/status")
+async def notebooklm_status() -> dict[str, Any]:
+    return await notebooklm_gen.check_auth()
+
+
+@app.post("/api/notebooklm/generate")
+async def notebooklm_generate(
+    file: UploadFile,
+    subject_title: str = Form(...),
+    chapter_title: str = Form(...),
+    reindex: str = Form("true"),
+) -> dict[str, str]:
+    if not file.filename:
+        raise HTTPException(422, "No file provided")
+    content = await file.read()
+    do_reindex = reindex.lower() in ("true", "1", "yes")
+    task_id = notebooklm_gen.create_task()
+    asyncio.create_task(
+        notebooklm_gen.run_generation(
+            task_id,
+            content,
+            file.filename,
+            subject_title.strip(),
+            chapter_title.strip(),
+            do_reindex,
+        )
+    )
+    return {"task_id": task_id}
+
+
+@app.get("/api/notebooklm/task/{task_id}")
+def notebooklm_task(task_id: str) -> dict[str, Any]:
+    t = notebooklm_gen.get_task(task_id)
+    if t is None:
+        raise HTTPException(404, "Task not found")
+    return t
 
 
 # ---------------------------------------------------------------------------

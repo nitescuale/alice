@@ -1,6 +1,8 @@
 # ALICE — Adaptive Learning Interview Coaching Engine
 
-Stack : **Tauri 2** + **React** + **Python** (FastAPI, ChromaDB, sentence-transformers, Ollama).
+Application de révision & d'entraînement aux entretiens techniques : tu fournis des slides (PDF), ALICE en fait un cours structuré (via NotebookLM), puis génère des QCM, des sessions d'interview et un assistant RAG local sur tes chapitres — le tout avec un LLM Ollama local pour la partie interactive.
+
+Stack : **Tauri 2** + **React** + **Python** (FastAPI, ChromaDB, sentence-transformers, Ollama, notebooklm-py).
 
 ## Prérequis
 
@@ -8,6 +10,7 @@ Stack : **Tauri 2** + **React** + **Python** (FastAPI, ChromaDB, sentence-transf
 - **Python 3.11+**
 - **Rust** (pour `npm run tauri dev` / build `.exe`) — [install](https://rustup.rs/)
 - **Ollama** en local pour le LLM ([ollama.com](https://ollama.com)) — ex. `ollama pull gemma2:2b`
+- **Compte Google** avec accès à NotebookLM (pour la génération automatique de cours)
 
 ## Installation
 
@@ -48,9 +51,28 @@ npm run dev:full
 
 ## Contenu des cours
 
+Deux manières d'ajouter un chapitre depuis l'écran **Importer** :
+
+### 1. Mode automatique (recommandé) — via NotebookLM
+
+Une seule fois, authentifier `notebooklm-py` dans un terminal (ouvre un navigateur) :
+
+```bash
+pip install "notebooklm-py[browser]"
+playwright install chromium
+notebooklm login
+```
+
+Ensuite dans l'app, onglet **Importer → Automatique** : uploader le PDF des slides, renseigner matière + chapitre, cliquer **Générer**. ALICE crée un notebook, y pousse le PDF, fait générer le cours markdown par NotebookLM (avec le prompt de [subjects/NOTEBOOKLM_PROMPT.md](subjects/NOTEBOOKLM_PROMPT.md)), le range sous `subjects/<matière>/<chapitre>/Cours.md`, met à jour la taxonomie et réindexe le RAG. Compter 1–3 min par chapitre.
+
+### 2. Mode manuel — import d'un markdown existant
+
+Onglet **Importer → Manuel** : coller le prompt dans NotebookLM à la main, uploader le markdown obtenu. Utile si la session NotebookLM n'est pas configurée, ou pour réimporter un cours déjà produit.
+
+### Édition directe
+
 - Éditer `[subjects/taxonomy.yaml](subjects/taxonomy.yaml)` (matières → cours → chapitres).
 - Placer les fichiers par chapitre sous `subjects/...` (PDF, Markdown, `.ipynb`, `.py`).
-- Workflow auteur recommandé : **NotebookLM** → export manuel → ces dossiers.
 - Dans l’app : **Réindexer RAG** (écran Cours) après ajout de fichiers.
 
 ## Réglages
