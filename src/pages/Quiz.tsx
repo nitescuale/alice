@@ -11,6 +11,8 @@ import {
   Database,
   RefreshCw,
   Sparkles,
+  Lightbulb,
+  Cloud,
 } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkMath from "remark-math";
@@ -27,7 +29,13 @@ import { ProgressRing } from "../components/ProgressRing";
 type Chapter = { id: string; title: string };
 type Subject = { id: string; title: string; chapters: Chapter[] };
 
-type QItem = { q: string; options: string[]; correct: number };
+type QItem = {
+  q: string;
+  options: string[];
+  correct: number;
+  hint?: string;
+  rationales?: string[];
+};
 
 type BankStatus = {
   subject_id: string;
@@ -82,6 +90,9 @@ export function Quiz() {
   /* Bank generation (slow) */
   const [bankGenLoading, setBankGenLoading] = useState(false);
   const [bankGenMsg, setBankGenMsg] = useState("");
+
+  /* Per-question hint visibility (only meaningful while answering) */
+  const [hintsOpen, setHintsOpen] = useState<Record<number, boolean>>({});
 
   /* Pick up a pending BANK generation that started before navigation */
   useEffect(() => {
@@ -270,6 +281,57 @@ export function Quiz() {
     setBankGenMsg("");
   }
 
+  /* ---------- Bank generation via NotebookLM (SLOW, server-side task) ---------- */
+  async function generateBankNotebookLM() {
+    if (!subjectId || isAllChapters || !chapterId) return;
+    if (bankStatus && bankStatus.count > 0) {
+      const ok = window.confirm(
+        "Regenerer la banque via NotebookLM ? Les questions existantes seront remplacees.",
+      );
+      if (!ok) return;
+    }
+    setErr("");
+    setBankGenLoading(true);
+    setBankGenMsg("Demarrage NotebookLM...");
+    _genLoadingMsg = "Demarrage NotebookLM...";
+
+    try {
+      const kickoff = await api<{ task_id: string }>(
+        "/api/questions/generate-notebooklm",
+        {
+          method: "POST",
+          body: JSON.stringify({ subject_id: subjectId, chapter_id: chapterId }),
+        },
+      );
+      const taskId = kickoff.task_id;
+
+      while (true) {
+        await new Promise((r) => setTimeout(r, 2500));
+        const t = await api<{
+          status: string;
+          progress_msg?: string;
+          error?: string;
+          result?: { quiz_count?: number };
+        }>(`/api/notebooklm/task/${taskId}`);
+        if (t.progress_msg) {
+          setBankGenMsg(t.progress_msg);
+          _genLoadingMsg = t.progress_msg;
+        }
+        if (t.status === "done") break;
+        if (t.status === "error") {
+          throw new Error(t.error || "NotebookLM task failed");
+        }
+      }
+      await loadBankStatus();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBankGenLoading(false);
+      setBankGenMsg("");
+      _genLoadingMsg = "";
+    }
+  }
+
   /* ---------- Quiz sampling (FAST) ---------- */
   async function generate() {
     if (!subjectId) return;
@@ -301,6 +363,7 @@ export function Quiz() {
       );
       const qs = data.questions ?? [];
       setQuestions(qs);
+      setHintsOpen({});
       _stash = { questions: qs, answers: {}, result: null, filters };
       if (!qs.length && data.raw) {
         setErr("Reponse LLM non JSON : verifiez Ollama / le modele.");
@@ -471,14 +534,22 @@ export function Quiz() {
               <span style={{ fontSize: "0.9rem" }}>
                 Banque : <strong>{bankStatus.count}</strong> questions disponibles
               </span>
-              <div style={{ marginLeft: "auto" }}>
+              <div style={{ marginLeft: "auto", display: "flex", gap: "var(--sp-2)" }}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={<Cloud size={12} />}
+                  onClick={generateBankNotebookLM}
+                >
+                  Regenerer via NotebookLM
+                </Button>
                 <Button
                   variant="ghost"
                   size="sm"
                   icon={<RefreshCw size={12} />}
                   onClick={() => generateBank(true)}
                 >
-                  Regenerer
+                  Regenerer (Ollama)
                 </Button>
               </div>
             </div>
@@ -488,14 +559,22 @@ export function Quiz() {
                 <Database size={16} style={{ color: "var(--noir-400)", flexShrink: 0 }} />
                 <span>Aucune banque de questions pour ce chapitre.</span>
               </div>
-              <div>
+              <div style={{ display: "flex", gap: "var(--sp-2)", flexWrap: "wrap" }}>
                 <Button
                   variant="primary"
+                  size="sm"
+                  icon={<Cloud size={14} />}
+                  onClick={generateBankNotebookLM}
+                >
+                  Generer via NotebookLM
+                </Button>
+                <Button
+                  variant="ghost"
                   size="sm"
                   icon={<Sparkles size={14} />}
                   onClick={() => generateBank(false)}
                 >
-                  Generer la banque
+                  Generer via Ollama (local)
                 </Button>
               </div>
             </div>
@@ -580,41 +659,88 @@ export function Quiz() {
           <div className="quiz-question__text md-content md-content--inline">
             <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{q.q}</Markdown>
           </div>
-          {q.options?.map((opt, j) => (
-            <div
-              key={j}
-              className={getOptionClass(i, j)}
-              onClick={() => {
-                if (result) return;
-                setAnswers((a) => ({ ...a, [String(i)]: j }));
-              }}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (result) return;
-                if (e.key === "Enter" || e.key === " ") {
-                  setAnswers((a) => ({ ...a, [String(i)]: j }));
-                }
-              }}
-            >
-              {!result && <span className="quiz-option__radio" />}
-              {result && (
-                <span style={{ display: "flex", flexShrink: 0 }}>
-                  {j === q.correct ? (
-                    <CheckCircle2 size={18} style={{ color: "var(--success-500)" }} />
-                  ) : answers[String(i)] === j ? (
-                    <XCircle size={18} style={{ color: "var(--danger-500)" }} />
-                  ) : (
-                    <span className="quiz-option__radio" />
+          {q.options?.map((opt, j) => {
+            const rationale = q.rationales?.[j] ?? "";
+            return (
+              <div key={j}>
+                <div
+                  className={getOptionClass(i, j)}
+                  onClick={() => {
+                    if (result) return;
+                    setAnswers((a) => ({ ...a, [String(i)]: j }));
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (result) return;
+                    if (e.key === "Enter" || e.key === " ") {
+                      setAnswers((a) => ({ ...a, [String(i)]: j }));
+                    }
+                  }}
+                >
+                  {!result && <span className="quiz-option__radio" />}
+                  {result && (
+                    <span style={{ display: "flex", flexShrink: 0 }}>
+                      {j === q.correct ? (
+                        <CheckCircle2 size={18} style={{ color: "var(--success-500)" }} />
+                      ) : answers[String(i)] === j ? (
+                        <XCircle size={18} style={{ color: "var(--danger-500)" }} />
+                      ) : (
+                        <span className="quiz-option__radio" />
+                      )}
+                    </span>
                   )}
-                </span>
+                  <span className="quiz-option__letter">{LETTERS[j]}</span>
+                  <span className="md-content md-content--inline">
+                    <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{opt}</Markdown>
+                  </span>
+                </div>
+                {result && rationale && (answers[String(i)] === j || j === q.correct) && (
+                  <div
+                    className="quiz-rationale md-content md-content--inline"
+                    style={{
+                      marginLeft: "var(--sp-7)",
+                      marginTop: "calc(var(--sp-1) * -1)",
+                      marginBottom: "var(--sp-2)",
+                      fontSize: "0.85rem",
+                      color: "var(--noir-300)",
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{rationale}</Markdown>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {!result && q.hint && (
+            <div style={{ marginTop: "var(--sp-2)" }}>
+              <Button
+                variant="ghost"
+                size="sm"
+                icon={<Lightbulb size={12} />}
+                onClick={() => setHintsOpen((h) => ({ ...h, [i]: !h[i] }))}
+              >
+                {hintsOpen[i] ? "Masquer l'indice" : "Indice"}
+              </Button>
+              {hintsOpen[i] && (
+                <div
+                  className="md-content md-content--inline"
+                  style={{
+                    marginTop: "var(--sp-2)",
+                    padding: "var(--sp-2) var(--sp-3)",
+                    background: "var(--amber-50, rgba(251,191,36,0.08))",
+                    borderLeft: "3px solid var(--amber-400)",
+                    borderRadius: "var(--radius-sm, 4px)",
+                    fontSize: "0.88rem",
+                    color: "var(--noir-200)",
+                  }}
+                >
+                  <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{q.hint}</Markdown>
+                </div>
               )}
-              <span className="quiz-option__letter">{LETTERS[j]}</span>
-              <span className="md-content md-content--inline">
-                <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{opt}</Markdown>
-              </span>
             </div>
-          ))}
+          )}
         </Card>
       ))}
 

@@ -858,6 +858,38 @@ def notebooklm_task(task_id: str) -> dict[str, Any]:
     return t
 
 
+class QuizRegenBody(BaseModel):
+    subject_id: str
+    chapter_id: str
+
+
+@app.post("/api/questions/generate-notebooklm")
+async def questions_generate_notebooklm(body: QuizRegenBody) -> dict[str, str]:
+    """Regenerate the quiz bank for an existing chapter using NotebookLM."""
+    tax_path = SUBJECTS_ROOT / "taxonomy.yaml"
+    if not tax_path.exists():
+        raise HTTPException(404, "taxonomy.yaml not found")
+    tax = yaml.safe_load(tax_path.read_text(encoding="utf-8")) or {}
+    subj = next((s for s in tax.get("subjects", []) if s["id"] == body.subject_id), None)
+    if not subj:
+        raise HTTPException(404, f"Subject '{body.subject_id}' not found")
+    chapter = next((c for c in subj.get("chapters", []) if c["id"] == body.chapter_id), None)
+    if not chapter:
+        raise HTTPException(404, f"Chapter '{body.chapter_id}' not found")
+
+    task_id = notebooklm_gen.create_task()
+    asyncio.create_task(
+        notebooklm_gen.run_quiz_regeneration(
+            task_id,
+            body.subject_id,
+            str(subj.get("title") or body.subject_id),
+            body.chapter_id,
+            str(chapter.get("title") or body.chapter_id),
+        )
+    )
+    return {"task_id": task_id}
+
+
 # ---------------------------------------------------------------------------
 # Interview chat  (stateless — client sends full history each turn)
 # ---------------------------------------------------------------------------

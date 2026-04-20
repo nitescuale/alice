@@ -16,13 +16,106 @@ from pathlib import Path
 from typing import Any
 
 from alice_server.config import SUBJECTS_ROOT
-from alice_server import ingest
+from alice_server import ingest, store
 
 
 _TASKS: dict[str, dict[str, Any]] = {}
 _LOCK = asyncio.Lock()
 
 _SUPPORTED_EXTS = (".pdf", ".md", ".markdown", ".txt", ".docx")
+
+# Neutral instructions for NotebookLM quiz generation — emphasise coverage and
+# no-duplication without pinning a specific count (the model picks the right
+# amount for the source material).
+_QUIZ_INSTRUCTIONS = (
+    "Génère le maximum de questions que tu peux en couvrant l'intégralité du "
+    "cours, sans que la même question ne soit posée deux fois. Chaque question "
+    "doit porter sur une notion distincte. Inclure un indice par question et "
+    "une explication pour chaque option de réponse."
+)
+
+
+def _map_notebooklm_quiz(data: Any) -> list[dict[str, Any]]:
+    """Map NotebookLM quiz JSON into ALICE question rows.
+
+    Input shape (NotebookLM):
+        {"title": ..., "questions": [{"question": ..., "hint": ...,
+           "answerOptions": [{"text": ..., "isCorrect": bool, "rationale": ...}, ...]}]}
+    Output shape (ALICE):
+        [{"q", "options", "correct", "hint", "rationales"}, ...]
+    Rows with malformed structure or no correct answer are skipped.
+    """
+    out: list[dict[str, Any]] = []
+    if not isinstance(data, dict):
+        return out
+    for q in data.get("questions", []) or []:
+        if not isinstance(q, dict):
+            continue
+        text = str(q.get("question") or "").strip()
+        raw_opts = q.get("answerOptions") or []
+        if not text or not isinstance(raw_opts, list) or not raw_opts:
+            continue
+        options: list[str] = []
+        rationales: list[str] = []
+        correct = -1
+        for i, o in enumerate(raw_opts):
+            if not isinstance(o, dict):
+                continue
+            options.append(str(o.get("text") or "").strip())
+            rationales.append(str(o.get("rationale") or "").strip())
+            if bool(o.get("isCorrect")) and correct < 0:
+                correct = i
+        if correct < 0 or len(options) < 2:
+            continue
+        out.append(
+            {
+                "q": text,
+                "options": options,
+                "correct": correct,
+                "hint": str(q.get("hint") or "").strip(),
+                "rationales": rationales,
+            }
+        )
+    return out
+
+
+async def _generate_and_store_quiz(
+    client: Any,
+    notebook_id: str,
+    subject_id: str,
+    chapter_id: str,
+) -> int:
+    """Drive the quiz generation on `notebook_id` and persist rows. Returns count."""
+    from notebooklm.rpc.types import QuizDifficulty  # type: ignore
+
+    st = await client.artifacts.generate_quiz(
+        notebook_id,
+        instructions=_QUIZ_INSTRUCTIONS,
+        difficulty=QuizDifficulty.MEDIUM,
+    )
+    await client.artifacts.wait_for_completion(notebook_id, st.task_id, timeout=900)
+
+    tmp_json: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as fh:
+            tmp_json = fh.name
+        await client.artifacts.download_quiz(notebook_id, tmp_json, output_format="json")
+        import json as _json
+
+        raw = Path(tmp_json).read_text(encoding="utf-8")
+        data = _json.loads(raw)
+    finally:
+        if tmp_json:
+            try:
+                os.unlink(tmp_json)
+            except OSError:
+                pass
+
+    rows = _map_notebooklm_quiz(data)
+    if not rows:
+        return 0
+    store.clear_bank(subject_id, chapter_id)
+    return store.insert_questions(subject_id, chapter_id, rows)
 
 
 def _now_iso() -> str:
@@ -205,6 +298,22 @@ async def run_generation(
             "filename": "Cours.md",
         }
 
+        # Re-enter the NotebookLM session to generate the quiz artefact on the
+        # same notebook we just used for the course.
+        _update(
+            task_id,
+            stage="quiz",
+            progress_msg="Génération du quiz via NotebookLM…",
+        )
+        try:
+            async with await NotebookLMClient.from_storage() as client:
+                count = await _generate_and_store_quiz(
+                    client, nb.id, subject_id, chapter_id
+                )
+            result["quiz_count"] = count
+        except Exception as exc:  # noqa: BLE001
+            result["quiz_error"] = str(exc)
+
         if reindex:
             _update(
                 task_id,
@@ -239,3 +348,92 @@ async def run_generation(
                     os.unlink(p)
                 except OSError:
                     pass
+
+
+async def run_quiz_regeneration(
+    task_id: str,
+    subject_id: str,
+    subject_title: str,
+    chapter_id: str,
+    chapter_title: str,
+) -> None:
+    """Regenerate the NotebookLM-sourced quiz bank for an already-imported chapter.
+
+    Tries to reuse an existing notebook with the matching title; otherwise
+    creates a new one and uploads the chapter's ``Cours.md``.
+    """
+    try:
+        async with _LOCK:
+            _update(
+                task_id,
+                status="running",
+                stage="auth",
+                progress_msg="Connexion à NotebookLM…",
+            )
+
+        from notebooklm import NotebookLMClient  # type: ignore
+
+        rel_path = f"{subject_id}/{chapter_id}"
+        cours_path = SUBJECTS_ROOT / rel_path / "Cours.md"
+        if not cours_path.exists():
+            raise FileNotFoundError(
+                f"Cours.md introuvable pour {rel_path}. Réimporter le chapitre d'abord."
+            )
+
+        expected_title = f"{subject_title} — {chapter_title}"
+
+        async with await NotebookLMClient.from_storage() as client:
+            _update(
+                task_id,
+                stage="lookup",
+                progress_msg="Recherche du notebook…",
+            )
+            notebooks = await client.notebooks.list()
+            nb_id: str | None = None
+            for nb in notebooks:
+                if (getattr(nb, "title", "") or "").strip() == expected_title:
+                    nb_id = nb.id
+                    break
+
+            if nb_id is None:
+                _update(
+                    task_id,
+                    stage="notebook",
+                    progress_msg="Création du notebook…",
+                )
+                nb = await client.notebooks.create(expected_title)
+                nb_id = nb.id
+                _update(
+                    task_id,
+                    stage="upload",
+                    progress_msg="Envoi du cours vers NotebookLM…",
+                )
+                await client.sources.add_file(nb_id, cours_path)
+
+            _update(
+                task_id,
+                stage="quiz",
+                progress_msg="Génération du quiz (peut prendre 1-3 min)…",
+            )
+            count = await _generate_and_store_quiz(
+                client, nb_id, subject_id, chapter_id
+            )
+
+        _update(
+            task_id,
+            status="done",
+            stage="done",
+            progress_msg="Terminé.",
+            result={
+                "subject_id": subject_id,
+                "chapter_id": chapter_id,
+                "quiz_count": count,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        _update(
+            task_id,
+            status="error",
+            progress_msg=f"Erreur: {exc}",
+            error=str(exc),
+        )

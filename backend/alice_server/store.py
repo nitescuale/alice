@@ -47,6 +47,12 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_qb_chapter ON question_bank(subject_id, chapter_id);
             """
         )
+        # Additive migration for hint + per-option rationales (NotebookLM-sourced quizzes).
+        existing_cols = {r["name"] for r in conn.execute("PRAGMA table_info(question_bank)")}
+        if "hint" not in existing_cols:
+            conn.execute("ALTER TABLE question_bank ADD COLUMN hint TEXT")
+        if "rationales" not in existing_cols:
+            conn.execute("ALTER TABLE question_bank ADD COLUMN rationales TEXT")
 
 
 @contextmanager
@@ -117,6 +123,8 @@ def insert_questions(
     rows = []
     for q in questions:
         opts = q.get("options", [])
+        rationales = q.get("rationales")
+        hint = q.get("hint")
         rows.append(
             (
                 subject_id,
@@ -125,12 +133,14 @@ def insert_questions(
                 json.dumps(opts, ensure_ascii=False),
                 int(q.get("correct", 0)),
                 now,
+                hint if isinstance(hint, str) and hint else None,
+                json.dumps(rationales, ensure_ascii=False) if isinstance(rationales, list) else None,
             )
         )
     with get_conn() as conn:
         conn.executemany(
-            "INSERT INTO question_bank (subject_id, chapter_id, q, options, correct, created_at) "
-            "VALUES (?,?,?,?,?,?)",
+            "INSERT INTO question_bank (subject_id, chapter_id, q, options, correct, created_at, hint, rationales) "
+            "VALUES (?,?,?,?,?,?,?,?)",
             rows,
         )
     return len(rows)
@@ -156,23 +166,38 @@ def bank_count(subject_id: str, chapter_id: str) -> int:
         return int(row["n"]) if row else 0
 
 
+_BANK_SELECT_COLS = "q, options, correct, hint, rationales"
+
+
 def _row_to_question(row: sqlite3.Row) -> dict[str, Any]:
     try:
         opts = json.loads(row["options"])
     except (TypeError, json.JSONDecodeError):
         opts = []
+    rationales: list[str] = []
+    raw_rat = row["rationales"] if "rationales" in row.keys() else None
+    if raw_rat:
+        try:
+            parsed = json.loads(raw_rat)
+            if isinstance(parsed, list):
+                rationales = [str(x) for x in parsed]
+        except (TypeError, json.JSONDecodeError):
+            pass
+    hint = row["hint"] if "hint" in row.keys() else None
     return {
         "q": row["q"],
         "options": opts if isinstance(opts, list) else [],
         "correct": int(row["correct"]),
+        "hint": hint or "",
+        "rationales": rationales,
     }
 
 
 def list_bank(subject_id: str, chapter_id: str) -> list[dict[str, Any]]:
-    """Return all bank rows for a chapter as {q, options, correct} dicts."""
+    """Return all bank rows for a chapter as {q, options, correct, hint, rationales} dicts."""
     with get_conn() as conn:
         cur = conn.execute(
-            "SELECT q, options, correct FROM question_bank "
+            f"SELECT {_BANK_SELECT_COLS} FROM question_bank "
             "WHERE subject_id = ? AND chapter_id = ? ORDER BY id ASC",
             (subject_id, chapter_id),
         )
@@ -189,13 +214,13 @@ def sample_bank(
     with get_conn() as conn:
         if chapter_id:
             cur = conn.execute(
-                "SELECT q, options, correct FROM question_bank "
+                f"SELECT {_BANK_SELECT_COLS} FROM question_bank "
                 "WHERE subject_id = ? AND chapter_id = ? ORDER BY RANDOM() LIMIT ?",
                 (subject_id, chapter_id, n),
             )
         else:
             cur = conn.execute(
-                "SELECT q, options, correct FROM question_bank "
+                f"SELECT {_BANK_SELECT_COLS} FROM question_bank "
                 "WHERE subject_id = ? ORDER BY RANDOM() LIMIT ?",
                 (subject_id, n),
             )
