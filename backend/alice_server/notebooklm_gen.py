@@ -93,7 +93,7 @@ async def _generate_and_store_quiz(
         instructions=_QUIZ_INSTRUCTIONS,
         difficulty=QuizDifficulty.MEDIUM,
     )
-    await client.artifacts.wait_for_completion(notebook_id, st.task_id, timeout=900)
+    await client.artifacts.wait_for_completion(notebook_id, st.task_id, timeout=1800)
 
     tmp_json: str | None = None
     try:
@@ -256,7 +256,7 @@ async def run_generation(
                 progress_msg="NotebookLM génère le contenu…",
             )
             await client.artifacts.wait_for_completion(
-                nb.id, status.task_id, timeout=900
+                nb.id, status.task_id, timeout=1800
             )
 
             _update(
