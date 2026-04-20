@@ -227,9 +227,11 @@ async def run_generation(
             _update(
                 task_id,
                 stage="upload",
-                progress_msg="Envoi du fichier vers NotebookLM…",
+                progress_msg="Envoi et indexation du fichier par NotebookLM…",
             )
-            await client.sources.add_file(nb.id, Path(tmp_pdf))
+            await client.sources.add_file(
+                nb.id, Path(tmp_pdf), wait=True, wait_timeout=600.0
+            )
 
             _update(
                 task_id,
@@ -406,9 +408,11 @@ async def run_quiz_regeneration(
                 _update(
                     task_id,
                     stage="upload",
-                    progress_msg="Envoi du cours vers NotebookLM…",
+                    progress_msg="Envoi et indexation du cours par NotebookLM…",
                 )
-                await client.sources.add_file(nb_id, cours_path)
+                await client.sources.add_file(
+                    nb_id, cours_path, wait=True, wait_timeout=600.0
+                )
 
             _update(
                 task_id,
