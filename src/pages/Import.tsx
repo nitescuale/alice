@@ -531,7 +531,7 @@ export function Import() {
                 <input
                   id="auto-file-input"
                   type="file"
-                  accept=".pdf"
+                  accept=".pdf,.md,.markdown,.txt,.docx"
                   onChange={handleAutoFileInput}
                   style={{ display: "none" }}
                   disabled={taskRunning}
@@ -550,10 +550,10 @@ export function Import() {
                   <>
                     <Upload size={28} style={{ color: "var(--noir-500)", marginBottom: "var(--sp-2)" }} />
                     <p style={{ fontSize: "var(--text-sm)", color: "var(--noir-400)", margin: 0 }}>
-                      Glissez un PDF ici ou cliquez pour parcourir
+                      Glissez un fichier ici ou cliquez pour parcourir
                     </p>
                     <p style={{ fontSize: "var(--text-xs)", color: "var(--noir-500)", margin: "var(--sp-1) 0 0" }}>
-                      .pdf uniquement
+                      .pdf, .md, .txt, .docx
                     </p>
                   </>
                 )}

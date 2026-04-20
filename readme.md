@@ -63,7 +63,7 @@ playwright install chromium
 notebooklm login
 ```
 
-Ensuite dans l'app, onglet **Importer → Automatique** : uploader le PDF des slides, renseigner matière + chapitre, cliquer **Générer**. ALICE crée un notebook, y pousse le PDF, fait générer le cours markdown par NotebookLM (avec le prompt de [subjects/NOTEBOOKLM_PROMPT.md](subjects/NOTEBOOKLM_PROMPT.md)), le range sous `subjects/<matière>/<chapitre>/Cours.md`, met à jour la taxonomie et réindexe le RAG. Compter 1–3 min par chapitre.
+Ensuite dans l'app, onglet **Importer → Automatique** : uploader un fichier source (`.pdf`, `.md`, `.txt`, `.docx`), renseigner matière + chapitre, cliquer **Générer**. ALICE crée un notebook, y pousse le fichier, fait générer le cours markdown par NotebookLM (avec le prompt de [subjects/NOTEBOOKLM_PROMPT.md](subjects/NOTEBOOKLM_PROMPT.md)), le range sous `subjects/<matière>/<chapitre>/Cours.md`, met à jour la taxonomie et réindexe le RAG. Compter 1–3 min par chapitre.
 
 ### 2. Mode manuel — import d'un markdown existant
 

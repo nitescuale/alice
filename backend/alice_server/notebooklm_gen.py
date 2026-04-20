@@ -22,6 +22,8 @@ from alice_server import ingest
 _TASKS: dict[str, dict[str, Any]] = {}
 _LOCK = asyncio.Lock()
 
+_SUPPORTED_EXTS = (".pdf", ".md", ".markdown", ".txt", ".docx")
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -94,6 +96,16 @@ async def run_generation(
     tmp_pdf: str | None = None
     tmp_md: str | None = None
 
+    ext = Path(pdf_filename).suffix.lower() or ".pdf"
+    if ext not in _SUPPORTED_EXTS:
+        _update(
+            task_id,
+            status="error",
+            progress_msg=f"Format non supporté: {ext}",
+            error=f"Formats acceptés: {', '.join(_SUPPORTED_EXTS)}",
+        )
+        return
+
     try:
         async with _LOCK:
             _update(
@@ -113,15 +125,16 @@ async def run_generation(
             )
             nb = await client.notebooks.create(f"{subject_title} — {chapter_title}")
 
-            # Persist PDF to tempfile for the client
-            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as fh:
+            # Persist source to tempfile for the client (preserve extension so
+            # NotebookLM detects the right MIME type).
+            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as fh:
                 fh.write(pdf_bytes)
                 tmp_pdf = fh.name
 
             _update(
                 task_id,
                 stage="upload",
-                progress_msg="Envoi du PDF vers NotebookLM…",
+                progress_msg="Envoi du fichier vers NotebookLM…",
             )
             await client.sources.add_file(nb.id, Path(tmp_pdf))
 
