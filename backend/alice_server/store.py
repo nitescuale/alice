@@ -53,6 +53,10 @@ def init_db() -> None:
             conn.execute("ALTER TABLE question_bank ADD COLUMN hint TEXT")
         if "rationales" not in existing_cols:
             conn.execute("ALTER TABLE question_bank ADD COLUMN rationales TEXT")
+        # Additive migration: per-attempt snapshot (questions, user answers, hints, rationales).
+        existing_cols_qa = {r["name"] for r in conn.execute("PRAGMA table_info(quiz_attempts)")}
+        if "details" not in existing_cols_qa:
+            conn.execute("ALTER TABLE quiz_attempts ADD COLUMN details TEXT")
 
 
 @contextmanager
@@ -66,12 +70,31 @@ def get_conn():
         conn.close()
 
 
-def record_quiz_attempt(chapter_id: str, score: float, total: int) -> None:
+def record_quiz_attempt(
+    chapter_id: str,
+    score: float,
+    total: int,
+    details: list[dict[str, Any]] | None = None,
+) -> int:
     with get_conn() as conn:
-        conn.execute(
-            "INSERT INTO quiz_attempts (chapter_id, score, total, created_at) VALUES (?,?,?,?)",
-            (chapter_id, score, total, datetime.utcnow().isoformat()),
+        cur = conn.execute(
+            "INSERT INTO quiz_attempts (chapter_id, score, total, created_at, details) VALUES (?,?,?,?,?)",
+            (
+                chapter_id,
+                score,
+                total,
+                datetime.utcnow().isoformat(),
+                json.dumps(details, ensure_ascii=False) if details else None,
+            ),
         )
+        return int(cur.lastrowid)
+
+
+def _strip_attempt_row(row: sqlite3.Row) -> dict[str, Any]:
+    d = dict(row)
+    d.pop("details", None)
+    d["has_details"] = bool(row["details"]) if "details" in row.keys() else False
+    return d
 
 
 def quiz_history(chapter_id: str | None = None) -> list[dict[str, Any]]:
@@ -83,7 +106,23 @@ def quiz_history(chapter_id: str | None = None) -> list[dict[str, Any]]:
             )
         else:
             cur = conn.execute("SELECT * FROM quiz_attempts ORDER BY id DESC LIMIT 100")
-        return [dict(r) for r in cur.fetchall()]
+        return [_strip_attempt_row(r) for r in cur.fetchall()]
+
+
+def quiz_attempt_detail(attempt_id: int) -> dict[str, Any] | None:
+    with get_conn() as conn:
+        cur = conn.execute("SELECT * FROM quiz_attempts WHERE id = ?", (attempt_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        raw = result.get("details")
+        if raw:
+            try:
+                result["details"] = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                result["details"] = None
+        return result
 
 
 def touch_chapter(chapter_id: str) -> None:

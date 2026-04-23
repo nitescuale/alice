@@ -14,19 +14,47 @@ import {
   BarChart3,
   BookOpen,
   Brain,
+  CheckCircle2,
   MessageSquare,
   TrendingUp,
   Trophy,
   Target,
+  XCircle,
+  Lightbulb,
+  Loader2,
 } from "lucide-react";
+import Markdown from "react-markdown";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import { api } from "../api";
 import { Card } from "../components/Card";
+import { Modal } from "../components/Modal";
 
 interface QuizEntry {
+  id?: number;
   chapter_id: string;
   score: number;
   total: number;
   created_at: string;
+  has_details?: boolean;
+}
+
+interface AttemptDetailItem {
+  q: string;
+  options: string[];
+  correct: number;
+  user_answer: number;
+  hint?: string;
+  rationales?: string[];
+}
+
+interface AttemptDetail {
+  id: number;
+  chapter_id: string;
+  score: number;
+  total: number;
+  created_at: string;
+  details: AttemptDetailItem[] | null;
 }
 
 interface ChapterEntry {
@@ -62,6 +90,31 @@ export function Dashboard() {
   const [quizHistory, setQuizHistory] = useState<QuizEntry[]>([]);
   const [chapters, setChapters] = useState<ChapterEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [openAttemptId, setOpenAttemptId] = useState<number | null>(null);
+  const [attemptDetail, setAttemptDetail] = useState<AttemptDetail | null>(null);
+  const [attemptLoading, setAttemptLoading] = useState(false);
+  const [attemptErr, setAttemptErr] = useState("");
+
+  async function openAttempt(id: number) {
+    setOpenAttemptId(id);
+    setAttemptDetail(null);
+    setAttemptErr("");
+    setAttemptLoading(true);
+    try {
+      const d = await api<AttemptDetail>(`/api/quiz/attempt/${id}`);
+      setAttemptDetail(d);
+    } catch (e) {
+      setAttemptErr(String(e));
+    } finally {
+      setAttemptLoading(false);
+    }
+  }
+
+  function closeAttempt() {
+    setOpenAttemptId(null);
+    setAttemptDetail(null);
+    setAttemptErr("");
+  }
 
   useEffect(() => {
     Promise.all([
@@ -395,11 +448,24 @@ export function Dashboard() {
               </div>
               {quizHistory.slice(-10).reverse().map((q, i) => {
                 const pct = Math.round((q.score / q.total) * 100);
+                const clickable = !!q.id && !!q.has_details;
                 return (
                   <div
-                    key={i}
+                    key={q.id ?? i}
                     className="quiz-history__item"
-                    style={{ gap: "var(--sp-4)" }}
+                    style={{
+                      gap: "var(--sp-4)",
+                      cursor: clickable ? "pointer" : "default",
+                      opacity: clickable ? 1 : 0.75,
+                    }}
+                    role={clickable ? "button" : undefined}
+                    tabIndex={clickable ? 0 : undefined}
+                    onClick={() => clickable && openAttempt(q.id!)}
+                    onKeyDown={(e) => {
+                      if (!clickable) return;
+                      if (e.key === "Enter" || e.key === " ") openAttempt(q.id!);
+                    }}
+                    title={clickable ? "Voir le détail" : "Détail indisponible"}
                   >
                     <span className="quiz-history__chapter">
                       {q.chapter_id}
@@ -428,6 +494,126 @@ export function Dashboard() {
           )}
         </>
       )}
+
+      <Modal
+        open={openAttemptId !== null}
+        onClose={closeAttempt}
+        title={
+          attemptDetail
+            ? `Quiz — ${attemptDetail.chapter_id} (${attemptDetail.score}/${attemptDetail.total})`
+            : "Quiz"
+        }
+        className="alice-modal--wide"
+      >
+        {attemptLoading && (
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)", color: "var(--noir-400)" }}>
+            <Loader2 size={14} className="spin" />
+            <span>Chargement...</span>
+          </div>
+        )}
+        {attemptErr && (
+          <div className="error-banner">{attemptErr}</div>
+        )}
+        {attemptDetail && !attemptLoading && (
+          <>
+            {!attemptDetail.details && (
+              <div style={{ color: "var(--noir-400)", fontStyle: "italic" }}>
+                Détail indisponible pour cet essai (antérieur à la revue complète).
+              </div>
+            )}
+            {attemptDetail.details && attemptDetail.details.map((d, i) => (
+              <Card
+                key={i}
+                variant="default"
+                padding="md"
+                className="quiz-question"
+                style={{ marginBottom: "var(--sp-3)" }}
+              >
+                <div className="quiz-question__number">
+                  Question {i + 1} sur {attemptDetail.details!.length}
+                  {d.user_answer === d.correct ? (
+                    <span style={{ marginLeft: "var(--sp-2)", color: "var(--success-500)" }}>
+                      <CheckCircle2 size={14} style={{ display: "inline", verticalAlign: "middle" }} /> correcte
+                    </span>
+                  ) : (
+                    <span style={{ marginLeft: "var(--sp-2)", color: "var(--danger-500)" }}>
+                      <XCircle size={14} style={{ display: "inline", verticalAlign: "middle" }} />{" "}
+                      {d.user_answer < 0 ? "non répondue" : "incorrecte"}
+                    </span>
+                  )}
+                </div>
+                <div className="quiz-question__text md-content md-content--inline">
+                  <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{d.q}</Markdown>
+                </div>
+                {d.options.map((opt, j) => {
+                  const isCorrect = j === d.correct;
+                  const isUser = j === d.user_answer;
+                  let cls = "quiz-option";
+                  if (isCorrect) cls += " quiz-option--correct";
+                  else if (isUser) cls += " quiz-option--wrong";
+                  const rationale = d.rationales?.[j] ?? "";
+                  return (
+                    <div key={j}>
+                      <div className={cls}>
+                        <span style={{ display: "flex", flexShrink: 0 }}>
+                          {isCorrect ? (
+                            <CheckCircle2 size={18} style={{ color: "var(--success-500)" }} />
+                          ) : isUser ? (
+                            <XCircle size={18} style={{ color: "var(--danger-500)" }} />
+                          ) : (
+                            <span className="quiz-option__radio" />
+                          )}
+                        </span>
+                        <span className="quiz-option__letter">{String.fromCharCode(65 + j)}</span>
+                        <span className="md-content md-content--inline">
+                          <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{opt}</Markdown>
+                        </span>
+                      </div>
+                      {rationale && (isUser || isCorrect) && (
+                        <div
+                          className="quiz-rationale md-content md-content--inline"
+                          style={{
+                            marginLeft: "var(--sp-7)",
+                            marginTop: "calc(var(--sp-1) * -1)",
+                            marginBottom: "var(--sp-2)",
+                            fontSize: "0.85rem",
+                            color: "var(--noir-300)",
+                            lineHeight: 1.5,
+                          }}
+                        >
+                          <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{rationale}</Markdown>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                {d.hint && (
+                  <div
+                    className="md-content md-content--inline"
+                    style={{
+                      marginTop: "var(--sp-2)",
+                      padding: "var(--sp-2) var(--sp-3)",
+                      background: "var(--amber-50, rgba(251,191,36,0.08))",
+                      borderLeft: "3px solid var(--amber-400)",
+                      borderRadius: "var(--radius-sm, 4px)",
+                      fontSize: "0.88rem",
+                      color: "var(--noir-200)",
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: "var(--sp-2)",
+                    }}
+                  >
+                    <Lightbulb size={14} style={{ marginTop: "2px", flexShrink: 0, color: "var(--amber-400)" }} />
+                    <div>
+                      <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{d.hint}</Markdown>
+                    </div>
+                  </div>
+                )}
+              </Card>
+            ))}
+          </>
+        )}
+      </Modal>
     </div>
   );
 }

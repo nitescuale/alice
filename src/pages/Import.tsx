@@ -31,6 +31,8 @@ interface UploadResult {
 interface AuthStatus {
   authenticated: boolean;
   message: string;
+  status?: "unknown" | "checking" | "login_in_progress" | "ready" | "expired" | "login_failed";
+  last_check?: string | null;
 }
 
 interface TaskResult {
@@ -178,9 +180,34 @@ export function Import() {
     }
   }, []);
 
+  const refreshAuth = useCallback(async () => {
+    setAuthLoading(true);
+    try {
+      const r = await fetch(`${apiBase}/api/notebooklm/refresh`, { method: "POST" });
+      if (!r.ok) throw new Error(r.statusText);
+      const data: AuthStatus = await r.json();
+      setAuthStatus(data);
+    } catch (e) {
+      setAuthStatus({
+        authenticated: false,
+        message: e instanceof TypeError ? "Impossible de contacter le backend." : String(e),
+      });
+    } finally {
+      setAuthLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchAuthStatus();
   }, [fetchAuthStatus]);
+
+  // Poll while the backend is still doing its automatic probe/login on boot.
+  useEffect(() => {
+    const s = authStatus?.status;
+    if (s !== "checking" && s !== "login_in_progress" && s !== "unknown") return;
+    const id = setInterval(fetchAuthStatus, 2000);
+    return () => clearInterval(id);
+  }, [authStatus?.status, fetchAuthStatus]);
 
   /* ---------- Auto tab: persistent stash sync ---------- */
   useEffect(() => {
@@ -347,9 +374,20 @@ export function Import() {
   /* ---------- Renderers ---------- */
 
   function renderAuthPanel() {
+    const s = authStatus?.status;
+    const autoInProgress = s === "checking" || s === "login_in_progress" || s === "unknown";
     return (
       <Card variant="default" padding="md" style={{ marginBottom: "var(--sp-4)" }}>
-        {authLoading && !authStatus ? (
+        {autoInProgress && !authed ? (
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)", color: "var(--noir-300)" }}>
+            <Loader2 size={16} className="spin" style={{ color: "var(--amber-400)" }} />
+            <span style={{ fontSize: "var(--text-sm)" }}>
+              {s === "login_in_progress"
+                ? "Reconnexion automatique à NotebookLM en cours…"
+                : "Vérification de la session NotebookLM…"}
+            </span>
+          </div>
+        ) : authLoading && !authStatus ? (
           <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)", color: "var(--noir-400)" }}>
             <Loader2 size={16} className="spin" />
             <span>Vérification de la connexion NotebookLM...</span>
@@ -394,7 +432,9 @@ export function Import() {
               {authStatus?.message}
             </p>
             <p style={{ fontSize: "var(--text-sm)", color: "var(--noir-300)", margin: 0 }}>
-              Ouvrez un terminal et exécutez une seule fois :{" "}
+              ALICE tente une reconnexion automatique au lancement. Si elle échoue
+              (pas de session Google valide dans le profil Chromium), ouvrez un
+              terminal et lancez une fois :{" "}
               <code
                 style={{
                   background: "var(--noir-800)",
@@ -405,11 +445,20 @@ export function Import() {
               >
                 notebooklm login
               </code>
-              . Puis revenez ici et cliquez sur "Re-vérifier".
+              .
             </p>
-            <div>
+            <div style={{ display: "flex", gap: "var(--sp-2)", flexWrap: "wrap" }}>
               <Button
-                variant="secondary"
+                variant="primary"
+                size="sm"
+                icon={<RefreshCw size={12} className={authLoading ? "spin" : ""} />}
+                onClick={refreshAuth}
+                disabled={authLoading}
+              >
+                Relancer la connexion auto
+              </Button>
+              <Button
+                variant="ghost"
                 size="sm"
                 icon={<RefreshCw size={12} className={authLoading ? "spin" : ""} />}
                 onClick={fetchAuthStatus}

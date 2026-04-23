@@ -43,6 +43,12 @@ def _startup() -> None:
     store.init_db()
 
 
+@app.on_event("startup")
+async def _startup_notebooklm_auth() -> None:
+    # Kick off auth probe + auto-login in background; do not block app start.
+    asyncio.create_task(notebooklm_gen.ensure_auth_ready())
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -486,14 +492,35 @@ class QuizGradeBody(BaseModel):
 def quiz_grade(body: QuizGradeBody) -> dict[str, Any]:
     correct = 0
     total = len(body.questions)
+    details: list[dict[str, Any]] = []
     for i, q in enumerate(body.questions):
         key = str(i)
-        if int(body.answers.get(key, -1)) == int(q.get("correct", -2)):
+        user_ans = int(body.answers.get(key, -1))
+        correct_idx = int(q.get("correct", -2))
+        if user_ans == correct_idx:
             correct += 1
+        details.append(
+            {
+                "q": q.get("q", ""),
+                "options": q.get("options", []),
+                "correct": correct_idx,
+                "user_answer": user_ans,
+                "hint": q.get("hint", ""),
+                "rationales": q.get("rationales", []),
+            }
+        )
     score = correct / total if total else 0.0
     label = body.chapter_id or "all-chapters"
-    store.record_quiz_attempt(label, float(correct), total)
-    return {"correct": correct, "total": total, "score": score}
+    attempt_id = store.record_quiz_attempt(label, float(correct), total, details=details)
+    return {"correct": correct, "total": total, "score": score, "attempt_id": attempt_id}
+
+
+@app.get("/api/quiz/attempt/{attempt_id}")
+def quiz_attempt(attempt_id: int) -> dict[str, Any]:
+    data = store.quiz_attempt_detail(attempt_id)
+    if not data:
+        raise HTTPException(404, "Attempt not found")
+    return data
 
 
 class OpenEvalBody(BaseModel):
@@ -862,7 +889,28 @@ async def courses_upload(
 
 @app.get("/api/notebooklm/status")
 async def notebooklm_status() -> dict[str, Any]:
-    return await notebooklm_gen.check_auth()
+    state = notebooklm_gen.get_auth_state()
+    # First call after boot: state is still "unknown" — kick off the background probe
+    # and return the current snapshot immediately so the UI can poll.
+    if state.get("status") == "unknown":
+        asyncio.create_task(notebooklm_gen.ensure_auth_ready())
+    return {
+        "authenticated": bool(state.get("authenticated")),
+        "message": state.get("message", ""),
+        "status": state.get("status", "unknown"),
+        "last_check": state.get("last_check"),
+    }
+
+
+@app.post("/api/notebooklm/refresh")
+async def notebooklm_refresh() -> dict[str, Any]:
+    state = await notebooklm_gen.ensure_auth_ready(force=True)
+    return {
+        "authenticated": bool(state.get("authenticated")),
+        "message": state.get("message", ""),
+        "status": state.get("status"),
+        "last_check": state.get("last_check"),
+    }
 
 
 @app.post("/api/notebooklm/generate")

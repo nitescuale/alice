@@ -389,6 +389,10 @@ textarea.alice-textarea {
   overflow-y: auto;
 }
 
+.alice-modal--wide .alice-modal__content {
+  max-width: 900px;
+}
+
 .alice-modal__header {
   display: flex;
   align-items: center;

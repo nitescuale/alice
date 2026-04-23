@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
+import sys
 import tempfile
 import uuid
 from datetime import datetime, timezone
@@ -21,6 +23,15 @@ from alice_server import ingest, store
 
 _TASKS: dict[str, dict[str, Any]] = {}
 _LOCK = asyncio.Lock()
+
+# Cached auth state + lock so only one auto-login runs at a time.
+_AUTH_STATE: dict[str, Any] = {
+    "status": "unknown",
+    "message": "",
+    "last_check": None,
+    "authenticated": False,
+}
+_AUTH_LOCK = asyncio.Lock()
 
 _SUPPORTED_EXTS = (".pdf", ".md", ".markdown", ".txt", ".docx")
 
@@ -174,30 +185,162 @@ def _update(task_id: str, **fields: Any) -> None:
     t.update(fields)
 
 
-async def check_auth() -> dict[str, Any]:
-    """Probe the NotebookLM session. Never raises."""
+async def _probe_auth() -> tuple[bool, str]:
+    """Lightweight auth probe. Returns (ok, message). Never raises."""
     try:
         from notebooklm import NotebookLMClient  # type: ignore
     except Exception as exc:  # noqa: BLE001
-        return {
-            "authenticated": False,
-            "message": f"Librairie notebooklm-py non installée ({exc}).",
-        }
-
+        return False, f"Librairie notebooklm-py non installée ({exc})."
     try:
         async with await NotebookLMClient.from_storage() as client:
             await client.notebooks.list()
-        return {"authenticated": True, "message": "Connecté à NotebookLM."}
+        return True, "Connecté à NotebookLM."
     except FileNotFoundError:
-        return {
-            "authenticated": False,
-            "message": "Aucune session NotebookLM trouvée. Exécute `notebooklm login` en CLI.",
-        }
+        return False, "Aucune session NotebookLM trouvée."
     except Exception as exc:  # noqa: BLE001
-        return {
-            "authenticated": False,
-            "message": f"Impossible de se connecter à NotebookLM: {exc}",
-        }
+        return False, f"Session NotebookLM invalide: {exc}"
+
+
+def _resolve_notebooklm_cli() -> str | None:
+    """Locate the `notebooklm` CLI, preferring the one next to the running python."""
+    py_dir = Path(sys.executable).parent
+    candidates = [
+        py_dir / "notebooklm.exe",
+        py_dir / "notebooklm",
+        py_dir / "Scripts" / "notebooklm.exe",
+        py_dir / "Scripts" / "notebooklm",
+    ]
+    for c in candidates:
+        if c.is_file():
+            return str(c)
+    return shutil.which("notebooklm")
+
+
+async def _run_auto_login(timeout: float = 75.0) -> tuple[bool, str]:
+    """Spawn `notebooklm login` as an argv-based subprocess (no shell), wait for the
+    browser to auto-auth via the persistent profile, then press Enter on stdin to save
+    the session. Returns (ok, message)."""
+    cli_path = _resolve_notebooklm_cli()
+    if not cli_path:
+        return False, "CLI `notebooklm` introuvable — `pip install \"notebooklm-py[browser]\"`."
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            cli_path,
+            "login",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return False, f"Lancement `notebooklm login` impossible: {exc}"
+
+    async def _feed_enter() -> None:
+        # Give Chromium time to open and Google to auto-sign-in via the
+        # persistent browser profile before pressing Enter.
+        await asyncio.sleep(10)
+        try:
+            if proc.stdin and not proc.stdin.is_closing():
+                proc.stdin.write(b"\n")
+                await proc.stdin.drain()
+                proc.stdin.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    feeder = asyncio.create_task(_feed_enter())
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except Exception:  # noqa: BLE001
+            pass
+        await proc.wait()
+        feeder.cancel()
+        return False, f"`notebooklm login` timeout ({int(timeout)}s)."
+    finally:
+        if not feeder.done():
+            feeder.cancel()
+
+    try:
+        stdout_data = await proc.stdout.read() if proc.stdout else b""
+    except Exception:  # noqa: BLE001
+        stdout_data = b""
+    tail = (stdout_data or b"").decode(errors="replace").strip()[-400:]
+    if proc.returncode != 0:
+        return False, f"`notebooklm login` a échoué (code {proc.returncode}). {tail}"
+    return True, "Login NotebookLM terminé."
+
+
+async def ensure_auth_ready(force: bool = False) -> dict[str, Any]:
+    """Probe auth; if expired/missing, try an auto-login. Returns state snapshot."""
+    async with _AUTH_LOCK:
+        if not force and _AUTH_STATE.get("status") == "ready":
+            return dict(_AUTH_STATE)
+
+        _AUTH_STATE.update(
+            status="checking",
+            message="Vérification de la session NotebookLM…",
+            authenticated=False,
+        )
+
+        ok, msg = await _probe_auth()
+        if ok:
+            _AUTH_STATE.update(
+                status="ready",
+                message=msg,
+                authenticated=True,
+                last_check=datetime.utcnow().isoformat(),
+            )
+            return dict(_AUTH_STATE)
+
+        _AUTH_STATE.update(
+            status="login_in_progress",
+            message=f"Session expirée ({msg}). Reconnexion automatique…",
+            authenticated=False,
+        )
+
+        login_ok, login_msg = await _run_auto_login()
+        if not login_ok:
+            _AUTH_STATE.update(
+                status="login_failed",
+                message=login_msg,
+                authenticated=False,
+                last_check=datetime.utcnow().isoformat(),
+            )
+            return dict(_AUTH_STATE)
+
+        ok2, msg2 = await _probe_auth()
+        if ok2:
+            _AUTH_STATE.update(
+                status="ready",
+                message="NotebookLM reconnecté automatiquement.",
+                authenticated=True,
+                last_check=datetime.utcnow().isoformat(),
+            )
+        else:
+            _AUTH_STATE.update(
+                status="expired",
+                message=f"Reconnexion échouée: {msg2}",
+                authenticated=False,
+                last_check=datetime.utcnow().isoformat(),
+            )
+        return dict(_AUTH_STATE)
+
+
+def get_auth_state() -> dict[str, Any]:
+    return dict(_AUTH_STATE)
+
+
+async def check_auth() -> dict[str, Any]:
+    """Backward-compatible auth status. Triggers auto-login if needed."""
+    state = await ensure_auth_ready()
+    return {
+        "authenticated": bool(state.get("authenticated")),
+        "message": state.get("message", ""),
+        "status": state.get("status"),
+        "last_check": state.get("last_check"),
+    }
 
 
 async def run_generation(
