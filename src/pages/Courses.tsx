@@ -134,6 +134,29 @@ export function Courses() {
     }
   }
 
+  async function deleteSubject(subjectId: string, subjectTitle: string, chapterCount: number) {
+    const warning = chapterCount > 0
+      ? `Supprimer « ${subjectTitle} » et ses ${chapterCount} chapitre${chapterCount > 1 ? "s" : ""} ? Cette action est irréversible.`
+      : `Supprimer la matière vide « ${subjectTitle} » ?`;
+    if (!confirm(warning)) return;
+    setErr("");
+    try {
+      await api("/api/subjects/delete", {
+        method: "POST",
+        body: JSON.stringify({ subject_id: subjectId }),
+      });
+      const t = await api<{ subjects: Subject[] }>("/api/taxonomy");
+      setTax(t);
+      setOpenSubjects(new Set(t.subjects.map((s) => s.id)));
+      if (sel?.subjectId === subjectId) {
+        setSel(null);
+        setContent(null);
+      }
+    } catch (e) {
+      setErr(String(e));
+    }
+  }
+
   async function deleteChapter(subjectId: string, chapterId: string, chapterTitle: string) {
     if (!confirm(`Supprimer « ${chapterTitle} » ? Cette action est irréversible.`)) return;
     setErr("");
@@ -220,19 +243,40 @@ export function Courses() {
 
           {tax?.subjects.map((s) => (
             <div key={s.id} className="tree-section">
-              <button
-                type="button"
-                className="tree-subject"
-                onClick={() => toggleSubject(s.id)}
-              >
-                <span
-                  className={`tree-subject__icon ${openSubjects.has(s.id) ? "tree-subject__icon--open" : ""}`}
+              <div className="tree-subject-row">
+                <button
+                  type="button"
+                  className="tree-subject"
+                  onClick={() => toggleSubject(s.id)}
                 >
-                  <ChevronRight size={14} />
-                </span>
-                <BookOpen size={14} />
-                {s.title}
-              </button>
+                  <span
+                    className={`tree-subject__icon ${openSubjects.has(s.id) ? "tree-subject__icon--open" : ""}`}
+                  >
+                    <ChevronRight size={14} />
+                  </span>
+                  <BookOpen size={14} />
+                  {s.title}
+                </button>
+                <button
+                  type="button"
+                  className="tree-chapter__delete"
+                  title="Supprimer la matière"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    deleteSubject(s.id, s.title, s.chapters?.length ?? 0);
+                  }}
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+
+              {openSubjects.has(s.id) && (s.chapters?.length ?? 0) === 0 && (
+                <div className="tree-chapter tree-chapter--empty">
+                  <span style={{ opacity: 0.5, fontSize: "var(--text-xs)", fontStyle: "italic", padding: "0 var(--sp-2)" }}>
+                    Aucun chapitre
+                  </span>
+                </div>
+              )}
 
               {openSubjects.has(s.id) &&
                 s.chapters?.map((ch) => (

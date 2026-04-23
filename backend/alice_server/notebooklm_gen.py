@@ -79,6 +79,33 @@ def _map_notebooklm_quiz(data: Any) -> list[dict[str, Any]]:
     return out
 
 
+def _quiz_notebook_title(subject_title: str, chapter_title: str) -> str:
+    """Title of the *quiz* notebook (source = Cours.md), distinct from the
+    course-generation notebook (source = PDF)."""
+    return f"{subject_title} — {chapter_title} [Cours]"
+
+
+async def _ensure_quiz_notebook(
+    client: Any,
+    subject_title: str,
+    chapter_title: str,
+    cours_path: Path,
+) -> str:
+    """Return the id of a notebook whose only source is Cours.md.
+
+    Reuses an existing notebook matching the quiz-title convention if it
+    exists; otherwise creates one and uploads ``cours_path``.
+    """
+    expected_title = _quiz_notebook_title(subject_title, chapter_title)
+    notebooks = await client.notebooks.list()
+    for nb in notebooks:
+        if (getattr(nb, "title", "") or "").strip() == expected_title:
+            return nb.id
+    nb = await client.notebooks.create(expected_title)
+    await client.sources.add_file(nb.id, cours_path, wait=True, wait_timeout=600.0)
+    return nb.id
+
+
 async def _generate_and_store_quiz(
     client: Any,
     notebook_id: str,
@@ -300,17 +327,26 @@ async def run_generation(
             "filename": "Cours.md",
         }
 
-        # Re-enter the NotebookLM session to generate the quiz artefact on the
-        # same notebook we just used for the course.
+        # Quiz is generated from a DIFFERENT notebook whose only source is
+        # Cours.md — otherwise NotebookLM pulls quiz questions from PDF
+        # content that was explicitly dropped during course generation.
         _update(
             task_id,
             stage="quiz",
-            progress_msg="Génération du quiz via NotebookLM…",
+            progress_msg="Création du notebook quiz (source = Cours.md)…",
         )
         try:
             async with await NotebookLMClient.from_storage() as client:
+                quiz_nb_id = await _ensure_quiz_notebook(
+                    client, subject_title, chapter_title, dest
+                )
+                _update(
+                    task_id,
+                    stage="quiz",
+                    progress_msg="Génération du quiz via NotebookLM…",
+                )
                 count = await _generate_and_store_quiz(
-                    client, nb.id, subject_id, chapter_id
+                    client, quiz_nb_id, subject_id, chapter_id
                 )
             result["quiz_count"] = count
         except Exception as exc:  # noqa: BLE001
@@ -382,37 +418,15 @@ async def run_quiz_regeneration(
                 f"Cours.md introuvable pour {rel_path}. Réimporter le chapitre d'abord."
             )
 
-        expected_title = f"{subject_title} — {chapter_title}"
-
         async with await NotebookLMClient.from_storage() as client:
             _update(
                 task_id,
                 stage="lookup",
-                progress_msg="Recherche du notebook…",
+                progress_msg="Préparation du notebook quiz (source = Cours.md)…",
             )
-            notebooks = await client.notebooks.list()
-            nb_id: str | None = None
-            for nb in notebooks:
-                if (getattr(nb, "title", "") or "").strip() == expected_title:
-                    nb_id = nb.id
-                    break
-
-            if nb_id is None:
-                _update(
-                    task_id,
-                    stage="notebook",
-                    progress_msg="Création du notebook…",
-                )
-                nb = await client.notebooks.create(expected_title)
-                nb_id = nb.id
-                _update(
-                    task_id,
-                    stage="upload",
-                    progress_msg="Envoi et indexation du cours par NotebookLM…",
-                )
-                await client.sources.add_file(
-                    nb_id, cours_path, wait=True, wait_timeout=600.0
-                )
+            nb_id = await _ensure_quiz_notebook(
+                client, subject_title, chapter_title, cours_path
+            )
 
             _update(
                 task_id,

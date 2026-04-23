@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "ALICE",
+        "title": "ALICE — Adaptive Learning Interview Coaching Engine",
         "width": 1100,
         "height": 780
       }

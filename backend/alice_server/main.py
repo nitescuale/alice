@@ -712,6 +712,52 @@ class DeleteChapterBody(BaseModel):
     chapter_id: str
 
 
+class DeleteSubjectBody(BaseModel):
+    subject_id: str
+
+
+@app.post("/api/subjects/delete")
+async def subjects_delete(body: DeleteSubjectBody) -> dict[str, Any]:
+    """Delete a subject and cascade-delete all its chapters (files + taxonomy)."""
+    import shutil
+
+    tax_path = SUBJECTS_ROOT / "taxonomy.yaml"
+    if not tax_path.exists():
+        raise HTTPException(404, "taxonomy.yaml not found")
+
+    tax = yaml.safe_load(tax_path.read_text(encoding="utf-8")) or {}
+    subjects: list[dict] = tax.get("subjects", [])
+
+    subj = next((s for s in subjects if s["id"] == body.subject_id), None)
+    if not subj:
+        raise HTTPException(404, f"Subject '{body.subject_id}' not found")
+
+    for chapter in subj.get("chapters", []) or []:
+        ch_path = chapter.get("path", f"{body.subject_id}/{chapter['id']}")
+        ch_dir = SUBJECTS_ROOT / ch_path
+        if ch_dir.exists():
+            shutil.rmtree(ch_dir, ignore_errors=True)
+
+    subjects.remove(subj)
+    subj_dir = SUBJECTS_ROOT / body.subject_id
+    if subj_dir.exists():
+        shutil.rmtree(subj_dir, ignore_errors=True)
+
+    tax_path.write_text(
+        yaml.dump(tax, allow_unicode=True, default_flow_style=False, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    result: dict[str, Any] = {"deleted_subject": body.subject_id}
+    try:
+        idx = ingest.index_courses()
+        result["index"] = idx
+    except Exception as exc:  # noqa: BLE001
+        result["index_error"] = str(exc)
+
+    return result
+
+
 @app.post("/api/chapters/delete")
 async def chapters_delete(body: DeleteChapterBody) -> dict[str, Any]:
     """Delete a chapter: remove files, update taxonomy, reindex RAG."""
@@ -739,15 +785,9 @@ async def chapters_delete(body: DeleteChapterBody) -> dict[str, Any]:
     if ch_dir.exists():
         shutil.rmtree(ch_dir)
 
-    # Remove chapter from taxonomy
+    # Remove chapter from taxonomy (the subject stays, even if empty — it can
+    # only be removed via the explicit subject-delete endpoint).
     chapters.remove(chapter)
-
-    # If subject has no more chapters, remove it entirely
-    if not chapters:
-        subjects.remove(subj)
-        subj_dir = SUBJECTS_ROOT / body.subject_id
-        if subj_dir.exists() and not any(subj_dir.iterdir()):
-            subj_dir.rmdir()
 
     tax_path.write_text(
         yaml.dump(tax, allow_unicode=True, default_flow_style=False, sort_keys=False),

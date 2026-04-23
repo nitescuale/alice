@@ -23,6 +23,20 @@
   margin-bottom: var(--sp-2);
 }
 
+.tree-subject-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.tree-subject-row .tree-chapter__delete {
+  margin-right: var(--sp-2);
+}
+
+.tree-subject-row:hover .tree-chapter__delete {
+  opacity: 1;
+}
+
 .tree-subject {
   display: flex;
   align-items: center;
@@ -35,7 +49,8 @@
   border-radius: var(--radius-md);
   background: none;
   border: none;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   text-align: left;
   transition: background var(--duration-fast) var(--ease-out);
   font-family: var(--font-body);

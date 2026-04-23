@@ -63,7 +63,12 @@ playwright install chromium
 notebooklm login
 ```
 
-Ensuite dans l'app, onglet **Importer → Automatique** : uploader un fichier source (`.pdf`, `.md`, `.txt`, `.docx`), renseigner matière + chapitre, cliquer **Générer**. ALICE crée un notebook, y pousse le fichier, fait générer le cours markdown par NotebookLM (avec le prompt de [subjects/NOTEBOOKLM_PROMPT.md](subjects/NOTEBOOKLM_PROMPT.md)), le range sous `subjects/<matière>/<chapitre>/Cours.md`, met à jour la taxonomie et réindexe le RAG. Compter 1–3 min par chapitre.
+Ensuite dans l'app, onglet **Importer → Automatique** : uploader un fichier source (`.pdf`, `.md`, `.txt`, `.docx`), renseigner matière + chapitre, cliquer **Générer**. Pipeline en deux étapes :
+
+1. **Source → Cours** : un notebook NotebookLM est créé à partir du fichier source, le cours markdown est généré (prompt : [subjects/NOTEBOOKLM_PROMPT.md](subjects/NOTEBOOKLM_PROMPT.md)) puis rangé sous `subjects/<matière>/<chapitre>/Cours.md`.
+2. **Cours → Quiz** : un second notebook (suffixe `[Cours]`) est créé avec **`Cours.md` comme seule source**, pour que le QCM ne référence que le contenu du cours généré (et pas des passages du PDF que NotebookLM avait filtrés).
+
+La taxonomie est mise à jour et le RAG réindexé. Compter 1–3 min par chapitre.
 
 ### 2. Mode manuel — import d'un markdown existant
 
@@ -74,6 +79,11 @@ Onglet **Importer → Manuel** : coller le prompt dans NotebookLM à la main, up
 - Éditer `[subjects/taxonomy.yaml](subjects/taxonomy.yaml)` (matières → cours → chapitres).
 - Placer les fichiers par chapitre sous `subjects/...` (PDF, Markdown, `.ipynb`, `.py`).
 - Dans l’app : **Réindexer RAG** (écran Cours) après ajout de fichiers.
+
+### Suppression
+
+- **Chapitre** : icône poubelle au survol dans l'arbre. Supprime uniquement le chapitre ; la matière reste (même vide).
+- **Matière** : icône poubelle au survol sur la ligne matière. Cascade — supprime tous les chapitres et leurs fichiers. Une matière peut aussi exister sans chapitre.
 
 ## Réglages
 
