@@ -4,7 +4,8 @@
 
 .alice-layout {
   display: flex;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   background: var(--noir-900);
 }
 
@@ -16,7 +17,10 @@
   flex-direction: column;
   background: var(--noir-950);
   border-right: 1px solid var(--noir-700);
-  position: relative;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
   z-index: var(--z-sidebar);
 }
 

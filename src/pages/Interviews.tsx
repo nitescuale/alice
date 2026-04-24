@@ -15,6 +15,7 @@ import {
   XCircle,
   Sparkles,
   BookOpen,
+  ArrowUp,
 } from "lucide-react";
 import { api } from "../api";
 import { Card, CardHeader } from "../components/Card";
@@ -64,6 +65,16 @@ interface Evaluation {
 
 const md = (src: string) => (
   <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+    {src}
+  </Markdown>
+);
+
+const mdInline = (src: string) => (
+  <Markdown
+    remarkPlugins={[remarkMath]}
+    rehypePlugins={[rehypeKatex]}
+    components={{ p: ({ children }) => <>{children}</> }}
+  >
     {src}
   </Markdown>
 );
@@ -449,7 +460,55 @@ export function Interviews() {
           </div>
         </Card>
       )}
+
+      <BackToTop />
     </div>
+  );
+}
+
+function BackToTop() {
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    const el = document.querySelector(".alice-main__content") as HTMLElement | null;
+    if (!el) return;
+    const onScroll = () => setVisible(el.scrollTop > 300);
+    el.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
+  const scrollUp = () => {
+    const el = document.querySelector(".alice-main__content") as HTMLElement | null;
+    el?.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  if (!visible) return null;
+  return (
+    <button
+      type="button"
+      onClick={scrollUp}
+      aria-label="Revenir en haut"
+      style={{
+        position: "fixed",
+        right: "var(--sp-6)",
+        bottom: "var(--sp-6)",
+        width: 44,
+        height: 44,
+        borderRadius: "50%",
+        border: "1px solid var(--noir-600)",
+        background: "var(--noir-800)",
+        color: "var(--amber-400)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        cursor: "pointer",
+        boxShadow: "var(--shadow-md)",
+        zIndex: 50,
+      }}
+    >
+      <ArrowUp size={18} />
+    </button>
   );
 }
 
@@ -485,7 +544,9 @@ function EvaluationCard({ ev }: { ev: Evaluation }) {
         >
           {score !== null ? `${score}/10` : "—"}
         </div>
-        <div style={{ fontSize: "var(--text-sm)", color: "var(--noir-200)" }}>{ev.verdict}</div>
+        <div className="md-inline" style={{ fontSize: "var(--text-sm)", color: "var(--noir-200)" }}>
+          {mdInline(ev.verdict)}
+        </div>
       </div>
 
       {ev.points_corrects?.length > 0 && (
@@ -569,7 +630,7 @@ function EvalList({
             }}
           >
             <span style={{ flexShrink: 0, marginTop: 2 }}>{icon}</span>
-            <span>{it}</span>
+            <span className="md-inline">{mdInline(it)}</span>
           </li>
         ))}
       </ul>
