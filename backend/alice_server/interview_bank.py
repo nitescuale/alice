@@ -23,10 +23,14 @@ these terminate the current question body.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import re
 from typing import Any
 
 import httpx
+
+from alice_server import ollama
 
 REPO_OWNER = "youssefHosni"
 REPO_NAME = "Data-Science-Interview-Questions-Answers"
@@ -146,7 +150,68 @@ async def fetch_topic_files(token: str | None = None) -> list[str]:
     )
 
 
-async def fetch_and_parse_all(token: str | None = None) -> dict[str, Any]:
+_TRANSLATE_SYSTEM = (
+    "Tu es traducteur technique anglais→français spécialisé en data science. "
+    "Tu préserves la précision technique et conserves les termes anglais quand "
+    "ils sont standards (backpropagation, batch normalization, dropout, overfitting, "
+    "gradient descent, etc.). Tu ne reformules pas, tu traduis."
+)
+
+
+async def _translate_batch(questions: list[str]) -> list[str]:
+    """Translate a batch of English questions to French via Ollama.
+
+    Falls back to originals on any failure.
+    """
+    if not questions:
+        return []
+    numbered = "\n".join(f"{i + 1}. {q}" for i, q in enumerate(questions))
+    prompt = (
+        "Traduis chaque question ci-dessous en français. "
+        "Retourne STRICTEMENT un objet JSON au format "
+        '{"translations": ["...", "...", ...]} '
+        "avec exactement autant d'entrées qu'il y a de questions, dans le même ordre.\n\n"
+        f"Questions à traduire :\n{numbered}\n"
+    )
+    try:
+        raw = await ollama.generate(
+            prompt,
+            system=_TRANSLATE_SYSTEM,
+            temperature=0.1,
+            force_json=True,
+        )
+        data = json.loads(raw)
+        translations = data.get("translations") if isinstance(data, dict) else None
+        if isinstance(translations, list) and len(translations) == len(questions):
+            return [str(t).strip() or q for t, q in zip(translations, questions)]
+    except (json.JSONDecodeError, httpx.HTTPError, KeyError, ValueError, TypeError):
+        pass
+    return list(questions)
+
+
+async def translate_questions(
+    questions: list[str], batch_size: int = 10, concurrency: int = 3
+) -> list[str]:
+    """Translate a list of questions to French, batched for throughput."""
+    if not questions:
+        return []
+    batches = [
+        questions[i : i + batch_size] for i in range(0, len(questions), batch_size)
+    ]
+    sem = asyncio.Semaphore(concurrency)
+
+    async def run(batch: list[str]) -> list[str]:
+        async with sem:
+            return await _translate_batch(batch)
+
+    results = await asyncio.gather(*(run(b) for b in batches))
+    out: list[str] = []
+    for r in results:
+        out.extend(r)
+    return out
+
+
+async def fetch_and_parse_all(token: str | None = None, translate: bool = True) -> dict[str, Any]:
     """Fetch every topic file, parse it, return a flat list of bank items.
 
     Return shape:
@@ -195,5 +260,16 @@ async def fetch_and_parse_all(token: str | None = None) -> dict[str, Any]:
                     "count": len(parsed),
                 }
             )
+
+    if translate and all_items:
+        try:
+            fr = await translate_questions([it["question"] for it in all_items])
+            if len(fr) == len(all_items):
+                for it, translated in zip(all_items, fr):
+                    it["question_en"] = it["question"]
+                    it["question"] = translated
+        except Exception:
+            # Translation failures are non-fatal: keep English questions.
+            pass
 
     return {"topics": topics, "items": all_items}
