@@ -49,6 +49,31 @@ _Q_HEADING_RE = re.compile(
 )
 _ANY_H1_H2_RE = re.compile(r"^#{1,2}\s+\S.*$")
 _LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+# `Answer:`, `**Answer**:`, `### Answer ###`, etc. — the marker that ends the
+# question body and starts the reference answer.
+_ANSWER_MARKER_RE = re.compile(
+    r"^\s*(?:#{1,6}\s*)?\**\s*Answer\s*\**\s*:?\s*\**\s*#*\s*$",
+    re.IGNORECASE,
+)
+# `https://github.com/<user>/<repo>/blob/<ref>/<path>` → raw.githubusercontent
+_GITHUB_BLOB_RE = re.compile(
+    r"https?://github\.com/([^/\s)]+)/([^/\s)]+)/blob/([^/\s)]+)/([^\s)]+)"
+)
+# Leading ordinal prefixes the translation LLM sometimes keeps from our
+# numbered prompt: `1. `, `12) `, `3: `. Anchored so it does not match inside.
+_LEADING_ORDINAL_RE = re.compile(r"^\s*\d{1,3}\s*[.)\-:]\s+")
+
+
+def _rewrite_image_urls(text: str) -> str:
+    """Rewrite every GitHub blob URL to a raw URL so images actually render."""
+    return _GITHUB_BLOB_RE.sub(
+        lambda m: f"https://raw.githubusercontent.com/{m.group(1)}/{m.group(2)}/{m.group(3)}/{m.group(4)}",
+        text,
+    )
+
+
+def _strip_leading_ordinal(text: str) -> str:
+    return _LEADING_ORDINAL_RE.sub("", text, count=1)
 
 
 def _topic_slug(filename: str) -> str:
@@ -105,12 +130,39 @@ def parse_topic_md(text: str) -> list[dict[str, Any]]:
         nonlocal cur_idx, cur_q, cur_body
         if cur_q is None or cur_idx is None:
             return
-        body = "\n".join(cur_body).strip()
-        body = re.sub(r"^\s*Answer\s*:\s*\n?", "", body, flags=re.IGNORECASE)
-        body = body.strip()
+        # Split the body at the `Answer:` marker. Everything before belongs
+        # to the question (it typically contains the table / image the
+        # question refers to). Everything after is the reference answer.
+        pre: list[str] = []
+        post: list[str] = []
+        seen_answer = False
+        for bl in cur_body:
+            if not seen_answer and _ANSWER_MARKER_RE.match(bl):
+                seen_answer = True
+                continue
+            (post if seen_answer else pre).append(bl)
+        # Fallback: legacy `Answer: ...` (marker inline on the same line as
+        # the first sentence) — strip only that prefix from the first non-
+        # empty line of the post buffer when no dedicated marker was found.
+        if not seen_answer:
+            post = pre
+            pre = []
+        answer = "\n".join(post).strip()
+        answer = re.sub(r"^\s*\**Answer\**\s*:\s*", "", answer, flags=re.IGNORECASE).strip()
+        extra = "\n".join(pre).strip()
+        question_full = cur_q
+        if extra:
+            question_full = f"{cur_q}\n\n{_rewrite_image_urls(extra)}"
+        answer = _rewrite_image_urls(answer)
         # Keep only if the answer has some substance
-        if len(body) >= 40:
-            items.append({"idx": cur_idx, "question": cur_q, "reference_answer": body})
+        if len(answer) >= 40:
+            items.append(
+                {
+                    "idx": cur_idx,
+                    "question": question_full,
+                    "reference_answer": answer,
+                }
+            )
         cur_idx = None
         cur_q = None
         cur_body = []
@@ -183,7 +235,11 @@ async def _translate_batch(questions: list[str]) -> list[str]:
         data = json.loads(raw)
         translations = data.get("translations") if isinstance(data, dict) else None
         if isinstance(translations, list) and len(translations) == len(questions):
-            return [str(t).strip() or q for t, q in zip(translations, questions)]
+            out: list[str] = []
+            for t, q in zip(translations, questions):
+                cleaned = _strip_leading_ordinal(str(t).strip())
+                out.append(cleaned or q)
+            return out
     except (json.JSONDecodeError, httpx.HTTPError, KeyError, ValueError, TypeError):
         pass
     return list(questions)
