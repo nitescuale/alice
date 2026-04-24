@@ -300,12 +300,23 @@ def sample_bank(
 # Interview bank
 # ---------------------------------------------------------------------------
 
+def _split_question_body(text: str) -> tuple[str, str]:
+    """Split a question into (natural-language text, attachment block)
+    at the first blank line. Attachment is the image/table verbatim block
+    that must be carried across re-imports without re-translation."""
+    idx = text.find("\n\n")
+    if idx < 0:
+        return text, ""
+    return text[:idx].rstrip(), text[idx + 2:]
+
+
 def replace_interview_bank(items: list[dict[str, Any]]) -> dict[str, int]:
     """Upsert the bank, preserving translations for rows whose English didn't change.
 
     Returns {"inserted": N_new, "preserved": N_reused, "deleted": N_stale,
     "topics": K}. "inserted" rows still need translation; "preserved" rows
-    keep their (possibly French) `question` text as-is.
+    keep their French translation but pick up any new attachment (image/table)
+    from the fresh parse.
     """
     now = datetime.utcnow().isoformat()
     inserted = preserved = 0
@@ -329,16 +340,21 @@ def replace_interview_bank(items: list[dict[str, Any]]) -> dict[str, int]:
             incoming_keys.add(key)
             en = it["question"]
             prev = existing.get(key)
-            # Reuse the existing (possibly French) question whenever:
-            #  - the English source hasn't changed, OR
-            #  - we don't yet know the English (pre-migration row) — in that
-            #    case we back-fill question_en so future imports are precise.
-            if prev is not None and (prev["question_en"] == en or not prev["question_en"]):
+            # Reuse the existing French translation whenever the natural-
+            # language text of the English question hasn't changed. We
+            # compare *text only*, not the attachment block, so a newly
+            # extracted image/table doesn't force re-translation. Pre-
+            # migration rows (empty question_en) also take this path.
+            prev_en_text, _ = _split_question_body(prev["question_en"]) if prev else ("", "")
+            en_text, en_att = _split_question_body(en)
+            if prev is not None and (prev_en_text == en_text or not prev["question_en"]):
+                fr_text, _ = _split_question_body(prev["question"])
+                new_question = f"{fr_text}\n\n{en_att}" if en_att else fr_text
                 conn.execute(
                     "UPDATE interview_bank "
-                    "SET reference_answer = ?, topic_label = ?, question_en = ? "
+                    "SET question = ?, reference_answer = ?, topic_label = ?, question_en = ? "
                     "WHERE topic = ? AND idx = ? AND source_path = ?",
-                    (it["reference_answer"], it.get("topic_label", topic), en,
+                    (new_question, it["reference_answer"], it.get("topic_label", topic), en,
                      topic, idx, source_path),
                 )
                 preserved += 1
