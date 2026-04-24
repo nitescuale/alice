@@ -76,6 +76,19 @@ def _strip_leading_ordinal(text: str) -> str:
     return _LEADING_ORDINAL_RE.sub("", text, count=1)
 
 
+def split_question_body(question: str) -> tuple[str, str]:
+    """Split a stored question into `(text, attachment)`.
+
+    `text` is the natural-language question a translator should see;
+    `attachment` is everything after the first blank line — typically
+    an image or a table that must be preserved verbatim.
+    """
+    idx = question.find("\n\n")
+    if idx < 0:
+        return question, ""
+    return question[:idx].rstrip(), question[idx + 2 :]
+
+
 def _topic_slug(filename: str) -> str:
     """`Deep Learning Questions & Answers for Data Scientists.md` -> `deep-learning`."""
     name = filename.rsplit("/", 1)[-1]

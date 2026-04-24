@@ -228,6 +228,17 @@
   color: var(--noir-100);
 }
 
+/* Images inline with the prose — cap width and add a polished frame */
+.md-content img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: var(--sp-4) auto;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--noir-700);
+  background: var(--noir-900);
+}
+
 /* Inline markdown (quiz questions/options) — strip block margins */
 .md-content--inline p {
   margin: 0;

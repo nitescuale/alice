@@ -1056,13 +1056,21 @@ async def _translate_bank_in_background() -> None:
         batch_size = 10
         for start in range(0, len(rows), batch_size):
             chunk = rows[start : start + batch_size]
+            # Translate only the natural-language prefix — anything after the
+            # first blank line (image, table) must be preserved verbatim.
+            split = [interview_bank.split_question_body(r["question"]) for r in chunk]
+            texts = [s[0] for s in split]
             try:
-                fr = await interview_bank._translate_batch([r["question"] for r in chunk])
+                fr = await interview_bank._translate_batch(texts)
             except Exception:
-                fr = [r["question"] for r in chunk]
+                fr = texts
             if len(fr) == len(chunk):
+                merged = [
+                    f"{fr_text}\n\n{att}" if att else fr_text
+                    for fr_text, (_, att) in zip(fr, split)
+                ]
                 store.update_bank_questions(
-                    [(r["id"], t) for r, t in zip(chunk, fr)]
+                    [(r["id"], t) for r, t in zip(chunk, merged)]
                 )
             _translation_progress["done"] = start + len(chunk)
     except Exception as exc:
