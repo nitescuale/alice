@@ -339,6 +339,25 @@ def interview_bank_count() -> int:
         return int(row["n"]) if row else 0
 
 
+def list_bank_questions_minimal() -> list[dict[str, Any]]:
+    """Return [{id, question}] for every row, in insertion order."""
+    with get_conn() as conn:
+        cur = conn.execute("SELECT id, question FROM interview_bank ORDER BY id ASC")
+        return [{"id": int(r["id"]), "question": r["question"]} for r in cur.fetchall()]
+
+
+def update_bank_questions(updates: list[tuple[int, str]]) -> int:
+    """Batch-update the `question` column by row id. Returns rows touched."""
+    if not updates:
+        return 0
+    with get_conn() as conn:
+        conn.executemany(
+            "UPDATE interview_bank SET question = ? WHERE id = ?",
+            [(new_q, row_id) for row_id, new_q in updates],
+        )
+    return len(updates)
+
+
 def random_interview_question(topic: str | None = None) -> dict[str, Any] | None:
     with get_conn() as conn:
         if topic:

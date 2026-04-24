@@ -211,7 +211,7 @@ async def translate_questions(
     return out
 
 
-async def fetch_and_parse_all(token: str | None = None, translate: bool = True) -> dict[str, Any]:
+async def fetch_and_parse_all(token: str | None = None, translate: bool = False) -> dict[str, Any]:
     """Fetch every topic file, parse it, return a flat list of bank items.
 
     Return shape:

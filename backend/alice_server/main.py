@@ -6,6 +6,7 @@ import asyncio
 import json
 import re
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -1033,14 +1034,59 @@ async def interview_chat(body: InterviewChatBody) -> dict[str, str]:
 # Interview bank (curated Q/A from youssefHosni/Data-Science-Interview-Questions-Answers)
 # ---------------------------------------------------------------------------
 
+_translation_progress: dict[str, Any] = {
+    "running": False,
+    "done": 0,
+    "total": 0,
+    "started_at": None,
+    "finished_at": None,
+    "error": None,
+}
+
+
+async def _translate_bank_in_background() -> None:
+    """Translate every bank row's question to French, updating as batches complete."""
+    _translation_progress.update(
+        running=True, done=0, total=0,
+        started_at=datetime.utcnow().isoformat(), finished_at=None, error=None,
+    )
+    try:
+        rows = store.list_bank_questions_minimal()
+        _translation_progress["total"] = len(rows)
+        batch_size = 10
+        for start in range(0, len(rows), batch_size):
+            chunk = rows[start : start + batch_size]
+            try:
+                fr = await interview_bank._translate_batch([r["question"] for r in chunk])
+            except Exception:
+                fr = [r["question"] for r in chunk]
+            if len(fr) == len(chunk):
+                store.update_bank_questions(
+                    [(r["id"], t) for r, t in zip(chunk, fr)]
+                )
+            _translation_progress["done"] = start + len(chunk)
+    except Exception as exc:
+        _translation_progress["error"] = str(exc)
+    finally:
+        _translation_progress["running"] = False
+        _translation_progress["finished_at"] = datetime.utcnow().isoformat()
+
+
 @app.post("/api/interview/bank/import")
 async def interview_bank_import() -> dict[str, Any]:
-    """Fetch the upstream repo, parse every topic file, replace the local bank."""
-    data = await interview_bank.fetch_and_parse_all()
+    """Fetch + parse upstream repo; insert English rows; translate in background."""
+    if _translation_progress.get("running"):
+        raise HTTPException(status_code=409, detail="Traduction déjà en cours.")
+    data = await interview_bank.fetch_and_parse_all(translate=False)
     result = store.replace_interview_bank(data["items"])
+    _translation_progress.update(
+        running=True, done=0, total=result["inserted"], error=None,
+    )
+    asyncio.create_task(_translate_bank_in_background())
     return {
         "inserted": result["inserted"],
         "topics": data["topics"],
+        "translation": "pending",
     }
 
 
@@ -1054,6 +1100,7 @@ def interview_bank_status() -> dict[str, Any]:
     return {
         "count": store.interview_bank_count(),
         "topics": store.interview_topics(),
+        "translation": dict(_translation_progress),
     }
 
 

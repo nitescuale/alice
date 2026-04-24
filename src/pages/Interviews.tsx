@@ -28,9 +28,19 @@ interface Topic {
   count: number;
 }
 
+interface TranslationProgress {
+  running: boolean;
+  done: number;
+  total: number;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+}
+
 interface BankStatus {
   count: number;
   topics: Topic[];
+  translation?: TranslationProgress;
 }
 
 interface BankQuestion {
@@ -90,6 +100,16 @@ export function Interviews() {
   useEffect(() => {
     fetchStatus();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!bankStatus?.translation?.running) return;
+    const id = setInterval(() => {
+      api<BankStatus>("/api/interview/bank/status")
+        .then(setBankStatus)
+        .catch(() => {});
+    }, 2000);
+    return () => clearInterval(id);
+  }, [bankStatus?.translation?.running]);
 
   const resetQuestionState = () => {
     setAnswer("");
@@ -272,12 +292,22 @@ export function Interviews() {
             <Button
               variant="ghost"
               size="sm"
-              icon={importing ? <Loader2 size={14} className="spin" /> : <Download size={14} />}
+              icon={
+                importing || bankStatus?.translation?.running ? (
+                  <Loader2 size={14} className="spin" />
+                ) : (
+                  <Download size={14} />
+                )
+              }
               onClick={importBank}
-              disabled={importing}
+              disabled={importing || bankStatus?.translation?.running}
               title="Ré-importer depuis GitHub"
             >
-              {importing ? "Sync…" : "Ré-importer"}
+              {importing
+                ? "Sync…"
+                : bankStatus?.translation?.running
+                  ? "Traduction…"
+                  : "Ré-importer"}
             </Button>
           </div>
           <div
@@ -289,6 +319,15 @@ export function Interviews() {
           >
             {bankStatus?.count ?? 0} questions dans la banque ·{" "}
             {bankStatus?.topics.length ?? 0} sujets
+            {bankStatus?.translation?.running ? (
+              <>
+                {" · "}
+                <span style={{ color: "var(--amber-400)" }}>
+                  traduction {bankStatus.translation.done}/
+                  {bankStatus.translation.total}
+                </span>
+              </>
+            ) : null}
           </div>
         </Card>
       )}
