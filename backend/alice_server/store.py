@@ -81,6 +81,12 @@ def init_db() -> None:
         existing_cols_qa = {r["name"] for r in conn.execute("PRAGMA table_info(quiz_attempts)")}
         if "details" not in existing_cols_qa:
             conn.execute("ALTER TABLE quiz_attempts ADD COLUMN details TEXT")
+        # Additive migration: keep the original English question so re-imports
+        # can preserve translations we already paid for. Empty string means
+        # "unknown" and gets back-filled on the next replace_interview_bank.
+        existing_cols_ib = {r["name"] for r in conn.execute("PRAGMA table_info(interview_bank)")}
+        if "question_en" not in existing_cols_ib:
+            conn.execute("ALTER TABLE interview_bank ADD COLUMN question_en TEXT NOT NULL DEFAULT ''")
 
 
 @contextmanager
@@ -295,29 +301,77 @@ def sample_bank(
 # ---------------------------------------------------------------------------
 
 def replace_interview_bank(items: list[dict[str, Any]]) -> dict[str, int]:
-    """Wipe and reinsert the full bank. Returns {"inserted": N, "topics": K}."""
+    """Upsert the bank, preserving translations for rows whose English didn't change.
+
+    Returns {"inserted": N_new, "preserved": N_reused, "deleted": N_stale,
+    "topics": K}. "inserted" rows still need translation; "preserved" rows
+    keep their (possibly French) `question` text as-is.
+    """
     now = datetime.utcnow().isoformat()
+    inserted = preserved = 0
     with get_conn() as conn:
-        conn.execute("DELETE FROM interview_bank")
-        conn.executemany(
-            "INSERT INTO interview_bank "
-            "(topic, topic_label, source_path, idx, question, reference_answer, created_at) "
-            "VALUES (?,?,?,?,?,?,?)",
-            [
-                (
-                    it["topic"],
-                    it.get("topic_label", it["topic"]),
-                    it.get("source_path", ""),
-                    int(it.get("idx", 0)),
-                    it["question"],
-                    it["reference_answer"],
-                    now,
+        # Snapshot existing rows keyed by the natural identity triple.
+        existing: dict[tuple[str, int, str], dict[str, Any]] = {}
+        for r in conn.execute(
+            "SELECT topic, idx, source_path, question, question_en FROM interview_bank"
+        ):
+            existing[(r["topic"], int(r["idx"]), r["source_path"])] = {
+                "question": r["question"],
+                "question_en": r["question_en"] or "",
+            }
+
+        incoming_keys: set[tuple[str, int, str]] = set()
+        for it in items:
+            topic = it["topic"]
+            idx = int(it.get("idx", 0))
+            source_path = it.get("source_path", "")
+            key = (topic, idx, source_path)
+            incoming_keys.add(key)
+            en = it["question"]
+            prev = existing.get(key)
+            # Reuse the existing (possibly French) question whenever:
+            #  - the English source hasn't changed, OR
+            #  - we don't yet know the English (pre-migration row) — in that
+            #    case we back-fill question_en so future imports are precise.
+            if prev is not None and (prev["question_en"] == en or not prev["question_en"]):
+                conn.execute(
+                    "UPDATE interview_bank "
+                    "SET reference_answer = ?, topic_label = ?, question_en = ? "
+                    "WHERE topic = ? AND idx = ? AND source_path = ?",
+                    (it["reference_answer"], it.get("topic_label", topic), en,
+                     topic, idx, source_path),
                 )
-                for it in items
-            ],
-        )
+                preserved += 1
+            else:
+                conn.execute(
+                    "DELETE FROM interview_bank "
+                    "WHERE topic = ? AND idx = ? AND source_path = ?",
+                    (topic, idx, source_path),
+                )
+                conn.execute(
+                    "INSERT INTO interview_bank "
+                    "(topic, topic_label, source_path, idx, question, question_en, reference_answer, created_at) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (topic, it.get("topic_label", topic), source_path, idx,
+                     en, en, it["reference_answer"], now),
+                )
+                inserted += 1
+
+        # Drop rows the upstream no longer serves.
+        stale = [k for k in existing if k not in incoming_keys]
+        for k in stale:
+            conn.execute(
+                "DELETE FROM interview_bank WHERE topic = ? AND idx = ? AND source_path = ?",
+                k,
+            )
+
     topics = {it["topic"] for it in items}
-    return {"inserted": len(items), "topics": len(topics)}
+    return {
+        "inserted": inserted,
+        "preserved": preserved,
+        "deleted": len(stale),
+        "topics": len(topics),
+    }
 
 
 def interview_topics() -> list[dict[str, Any]]:
@@ -343,6 +397,18 @@ def list_bank_questions_minimal() -> list[dict[str, Any]]:
     """Return [{id, question}] for every row, in insertion order."""
     with get_conn() as conn:
         cur = conn.execute("SELECT id, question FROM interview_bank ORDER BY id ASC")
+        return [{"id": int(r["id"]), "question": r["question"]} for r in cur.fetchall()]
+
+
+def list_untranslated_questions() -> list[dict[str, Any]]:
+    """Return [{id, question}] only for rows whose `question` still equals the
+    original English (i.e. the translation pass hasn't touched them yet)."""
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT id, question FROM interview_bank "
+            "WHERE question_en != '' AND question = question_en "
+            "ORDER BY id ASC"
+        )
         return [{"id": int(r["id"]), "question": r["question"]} for r in cur.fetchall()]
 
 

@@ -1045,13 +1045,13 @@ _translation_progress: dict[str, Any] = {
 
 
 async def _translate_bank_in_background() -> None:
-    """Translate every bank row's question to French, updating as batches complete."""
+    """Translate untranslated bank rows to French, updating as batches complete."""
     _translation_progress.update(
         running=True, done=0, total=0,
         started_at=datetime.utcnow().isoformat(), finished_at=None, error=None,
     )
     try:
-        rows = store.list_bank_questions_minimal()
+        rows = store.list_untranslated_questions()
         _translation_progress["total"] = len(rows)
         batch_size = 10
         for start in range(0, len(rows), batch_size):
@@ -1087,14 +1087,20 @@ async def interview_bank_import() -> dict[str, Any]:
         raise HTTPException(status_code=409, detail="Traduction déjà en cours.")
     data = await interview_bank.fetch_and_parse_all(translate=False)
     result = store.replace_interview_bank(data["items"])
-    _translation_progress.update(
-        running=True, done=0, total=result["inserted"], error=None,
-    )
-    asyncio.create_task(_translate_bank_in_background())
+    pending = len(store.list_untranslated_questions())
+    translation_state = "idle"
+    if pending > 0:
+        _translation_progress.update(
+            running=True, done=0, total=pending, error=None,
+        )
+        asyncio.create_task(_translate_bank_in_background())
+        translation_state = "pending"
     return {
         "inserted": result["inserted"],
+        "preserved": result.get("preserved", 0),
+        "deleted": result.get("deleted", 0),
         "topics": data["topics"],
-        "translation": "pending",
+        "translation": translation_state,
     }
 
 
