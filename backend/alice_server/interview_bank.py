@@ -143,30 +143,45 @@ def parse_topic_md(text: str) -> list[dict[str, Any]]:
         nonlocal cur_idx, cur_q, cur_body
         if cur_q is None or cur_idx is None:
             return
-        # Split the body at the `Answer:` marker. Everything before belongs
-        # to the question (it typically contains the table / image the
-        # question refers to). Everything after is the reference answer.
-        pre: list[str] = []
-        post: list[str] = []
-        seen_answer = False
+        # Partition body into (attachment, answer). Attachment collects the
+        # leading image / table / code block that *belongs to the question*
+        # (describes the data the question refers to). We stop collecting
+        # attachment as soon as we hit prose or an explicit `Answer:` marker.
+        attachment: list[str] = []
+        answer_lines: list[str] = []
+        mode = "attachment"
         for bl in cur_body:
-            if not seen_answer and _ANSWER_MARKER_RE.match(bl):
-                seen_answer = True
-                continue
-            (post if seen_answer else pre).append(bl)
-        # Fallback: legacy `Answer: ...` (marker inline on the same line as
-        # the first sentence) — strip only that prefix from the first non-
-        # empty line of the post buffer when no dedicated marker was found.
-        if not seen_answer:
-            post = pre
-            pre = []
-        answer = "\n".join(post).strip()
+            if mode == "attachment":
+                stripped = bl.strip()
+                if not stripped:
+                    attachment.append(bl)
+                    continue
+                if stripped.startswith("!["):  # image
+                    attachment.append(bl)
+                    continue
+                if stripped.startswith("|"):  # table row
+                    attachment.append(bl)
+                    continue
+                if _ANSWER_MARKER_RE.match(bl):  # explicit marker — drop it
+                    mode = "answer"
+                    continue
+                # Anything else (prose, code fence, inline `Answer: ...`)
+                # starts the answer.
+                mode = "answer"
+            answer_lines.append(bl)
+        # Trim trailing blank lines from the attachment.
+        while attachment and not attachment[-1].strip():
+            attachment.pop()
+
+        answer = "\n".join(answer_lines).strip()
         answer = re.sub(r"^\s*\**Answer\**\s*:\s*", "", answer, flags=re.IGNORECASE).strip()
-        extra = "\n".join(pre).strip()
+        answer = _rewrite_image_urls(answer)
+
         question_full = cur_q
+        extra = "\n".join(attachment).strip()
         if extra:
             question_full = f"{cur_q}\n\n{_rewrite_image_urls(extra)}"
-        answer = _rewrite_image_urls(answer)
+
         # Keep only if the answer has some substance
         if len(answer) >= 40:
             items.append(
