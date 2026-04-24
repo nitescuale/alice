@@ -45,6 +45,30 @@ def init_db() -> None:
                 created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_qb_chapter ON question_bank(subject_id, chapter_id);
+            CREATE TABLE IF NOT EXISTS interview_bank (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                topic TEXT NOT NULL,
+                topic_label TEXT NOT NULL,
+                source_path TEXT NOT NULL,
+                idx INTEGER NOT NULL,
+                question TEXT NOT NULL,
+                reference_answer TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(topic, idx, source_path)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ib_topic ON interview_bank(topic);
+            CREATE TABLE IF NOT EXISTS interview_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bank_id INTEGER,
+                topic TEXT NOT NULL,
+                question TEXT NOT NULL,
+                reference_answer TEXT NOT NULL,
+                user_answer TEXT NOT NULL,
+                score REAL,
+                evaluation TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_ia_topic ON interview_attempts(topic);
             """
         )
         # Additive migration for hint + per-option rationales (NotebookLM-sourced quizzes).
@@ -264,6 +288,135 @@ def sample_bank(
                 (subject_id, n),
             )
         return [_row_to_question(r) for r in cur.fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# Interview bank
+# ---------------------------------------------------------------------------
+
+def replace_interview_bank(items: list[dict[str, Any]]) -> dict[str, int]:
+    """Wipe and reinsert the full bank. Returns {"inserted": N, "topics": K}."""
+    now = datetime.utcnow().isoformat()
+    with get_conn() as conn:
+        conn.execute("DELETE FROM interview_bank")
+        conn.executemany(
+            "INSERT INTO interview_bank "
+            "(topic, topic_label, source_path, idx, question, reference_answer, created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            [
+                (
+                    it["topic"],
+                    it.get("topic_label", it["topic"]),
+                    it.get("source_path", ""),
+                    int(it.get("idx", 0)),
+                    it["question"],
+                    it["reference_answer"],
+                    now,
+                )
+                for it in items
+            ],
+        )
+    topics = {it["topic"] for it in items}
+    return {"inserted": len(items), "topics": len(topics)}
+
+
+def interview_topics() -> list[dict[str, Any]]:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT topic, MAX(topic_label) AS label, COUNT(*) AS count "
+            "FROM interview_bank GROUP BY topic ORDER BY label ASC"
+        )
+        return [
+            {"slug": r["topic"], "label": r["label"], "count": int(r["count"])}
+            for r in cur.fetchall()
+        ]
+
+
+def interview_bank_count() -> int:
+    with get_conn() as conn:
+        cur = conn.execute("SELECT COUNT(*) AS n FROM interview_bank")
+        row = cur.fetchone()
+        return int(row["n"]) if row else 0
+
+
+def random_interview_question(topic: str | None = None) -> dict[str, Any] | None:
+    with get_conn() as conn:
+        if topic:
+            cur = conn.execute(
+                "SELECT id, topic, topic_label, source_path, idx, question, reference_answer "
+                "FROM interview_bank WHERE topic = ? ORDER BY RANDOM() LIMIT 1",
+                (topic,),
+            )
+        else:
+            cur = conn.execute(
+                "SELECT id, topic, topic_label, source_path, idx, question, reference_answer "
+                "FROM interview_bank ORDER BY RANDOM() LIMIT 1"
+            )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def record_interview_attempt(
+    bank_id: int | None,
+    topic: str,
+    question: str,
+    reference_answer: str,
+    user_answer: str,
+    score: float | None,
+    evaluation: dict[str, Any] | None,
+) -> int:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO interview_attempts "
+            "(bank_id, topic, question, reference_answer, user_answer, score, evaluation, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (
+                bank_id,
+                topic,
+                question,
+                reference_answer,
+                user_answer,
+                score,
+                json.dumps(evaluation, ensure_ascii=False) if evaluation else None,
+                datetime.utcnow().isoformat(),
+            ),
+        )
+        return int(cur.lastrowid)
+
+
+def interview_history(topic: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    with get_conn() as conn:
+        if topic:
+            cur = conn.execute(
+                "SELECT id, bank_id, topic, question, score, created_at "
+                "FROM interview_attempts WHERE topic = ? ORDER BY id DESC LIMIT ?",
+                (topic, int(limit)),
+            )
+        else:
+            cur = conn.execute(
+                "SELECT id, bank_id, topic, question, score, created_at "
+                "FROM interview_attempts ORDER BY id DESC LIMIT ?",
+                (int(limit),),
+            )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def interview_attempt_detail(attempt_id: int) -> dict[str, Any] | None:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT * FROM interview_attempts WHERE id = ?", (attempt_id,)
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        raw = d.get("evaluation")
+        if raw:
+            try:
+                d["evaluation"] = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                d["evaluation"] = None
+        return d
 
 
 def banks_summary(subject_id: str) -> list[dict[str, Any]]:

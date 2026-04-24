@@ -1,377 +1,539 @@
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Markdown from "react-markdown";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import {
-  MessageSquare,
-  AlertCircle,
+  Shuffle,
+  Lightbulb,
   Send,
-  Bot,
-  User,
-  Trash2,
-  ChevronDown,
+  Eye,
+  EyeOff,
+  Loader2,
+  Download,
+  AlertCircle,
+  CheckCircle2,
+  XCircle,
+  Sparkles,
+  BookOpen,
 } from "lucide-react";
 import { api } from "../api";
-import { Card } from "../components/Card";
+import { Card, CardHeader } from "../components/Card";
 import { Button } from "../components/Button";
 import { Badge } from "../components/Badge";
+import { Select } from "../components/Select";
 
-// ------------------------------------------------------------------
-// Types
-// ------------------------------------------------------------------
-
-interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
+interface Topic {
+  slug: string;
+  label: string;
+  count: number;
 }
 
-// ------------------------------------------------------------------
-// Component
-// ------------------------------------------------------------------
+interface BankStatus {
+  count: number;
+  topics: Topic[];
+}
+
+interface BankQuestion {
+  id: number;
+  topic: string;
+  topic_label: string;
+  source_path: string;
+  idx: number;
+  question: string;
+  reference_answer: string;
+}
+
+interface Evaluation {
+  score: number | null;
+  verdict: string;
+  points_corrects: string[];
+  points_manquants: string[];
+  erreurs: string[];
+  enrichissement: string;
+}
+
+const md = (src: string) => (
+  <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+    {src}
+  </Markdown>
+);
 
 export function Interviews() {
-  const [problem, setProblem] = useState("");
-  const [company, setCompany] = useState("");
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState("");
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const [bankStatus, setBankStatus] = useState<BankStatus | null>(null);
+  const [topic, setTopic] = useState<string>("");
+  const [question, setQuestion] = useState<BankQuestion | null>(null);
+  const [answer, setAnswer] = useState("");
+  const [hint, setHint] = useState<string>("");
+  const [showReference, setShowReference] = useState(false);
+  const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
 
-  function scrollToBottom() {
-    setTimeout(() => {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-    }, 50);
-  }
+  const [loadingBank, setLoadingBank] = useState(false);
+  const [loadingQ, setLoadingQ] = useState(false);
+  const [loadingHint, setLoadingHint] = useState(false);
+  const [loadingGrade, setLoadingGrade] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [err, setErr] = useState<string>("");
 
-  async function sendMessage() {
-    const text = input.trim();
-    if (!text || loading) return;
-
-    setErr("");
-    setInput("");
-
-    const newMessages: ChatMessage[] = [
-      ...messages,
-      { role: "user", content: text },
-    ];
-    setMessages(newMessages);
-    setLoading(true);
-    scrollToBottom();
-
+  const fetchStatus = useCallback(async () => {
+    setLoadingBank(true);
     try {
-      const r = await api<{ reply: string }>("/api/interview/chat", {
+      const s = await api<BankStatus>("/api/interview/bank/status");
+      setBankStatus(s);
+      if (!topic && s.topics.length) setTopic(s.topics[0].slug);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : "Erreur chargement banque");
+    } finally {
+      setLoadingBank(false);
+    }
+  }, [topic]);
+
+  useEffect(() => {
+    fetchStatus();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const resetQuestionState = () => {
+    setAnswer("");
+    setHint("");
+    setShowReference(false);
+    setEvaluation(null);
+    setErr("");
+  };
+
+  const importBank = async () => {
+    setImporting(true);
+    setErr("");
+    try {
+      await api("/api/interview/bank/import", { method: "POST" });
+      await fetchStatus();
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : "Échec de l'import");
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const pickRandom = async () => {
+    setLoadingQ(true);
+    resetQuestionState();
+    try {
+      const q = topic
+        ? await api<BankQuestion>(
+            `/api/interview/question/random?topic=${encodeURIComponent(topic)}`,
+          )
+        : await api<BankQuestion>("/api/interview/question/random");
+      setQuestion(q);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : "Impossible de tirer une question");
+    } finally {
+      setLoadingQ(false);
+    }
+  };
+
+  const requestHint = async () => {
+    if (!question) return;
+    setLoadingHint(true);
+    setErr("");
+    try {
+      const r = await api<{ hint: string }>("/api/interview/open/hint", {
         method: "POST",
         body: JSON.stringify({
-          messages: newMessages,
-          problem: problem.trim() || null,
-          company: company.trim() || null,
+          question: question.question,
+          reference_answer: question.reference_answer,
+          user_answer: answer,
         }),
       });
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: r.reply },
-      ]);
-      scrollToBottom();
-    } catch (e) {
-      setErr(String(e));
+      setHint(r.hint);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : "Erreur lors de la demande d'indice");
     } finally {
-      setLoading(false);
+      setLoadingHint(false);
     }
-  }
+  };
 
-  function clearChat() {
-    setMessages([]);
+  const submitAnswer = async () => {
+    if (!question || !answer.trim()) return;
+    setLoadingGrade(true);
     setErr("");
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
+    try {
+      const r = await api<{ evaluation: Evaluation; attempt_id: number | null }>(
+        "/api/interview/open/grade",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            question: question.question,
+            reference_answer: question.reference_answer,
+            user_answer: answer,
+            bank_id: question.id,
+            topic: question.topic,
+          }),
+        },
+      );
+      setEvaluation(r.evaluation);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : "Erreur lors de l'évaluation");
+    } finally {
+      setLoadingGrade(false);
     }
-  }
+  };
 
-  const hasContext = problem.trim().length > 0;
+  const topicOptions = useMemo(
+    () =>
+      (bankStatus?.topics ?? []).map((t) => ({
+        value: t.slug,
+        label: `${t.label} (${t.count})`,
+      })),
+    [bankStatus],
+  );
+
+  const bankEmpty = !loadingBank && (bankStatus?.count ?? 0) === 0;
 
   return (
-    <div>
-      <div className="page-header">
-        <h1 className="page-header__title">Interviews</h1>
-        <p className="page-header__subtitle">
-          Simulez un entretien technique avec un intervieweur IA. Partagez un
-          enonce ou commencez directement — l'IA guide, questionne et evalue.
+    <div style={{ padding: "var(--sp-6)", maxWidth: 1100, margin: "0 auto" }}>
+      <div style={{ marginBottom: "var(--sp-5)" }}>
+        <h1
+          style={{
+            fontFamily: "var(--font-display)",
+            fontSize: "var(--text-2xl)",
+            fontWeight: 700,
+            margin: 0,
+            display: "flex",
+            alignItems: "center",
+            gap: "var(--sp-2)",
+          }}
+        >
+          <Sparkles size={22} style={{ color: "var(--amber-400)" }} />
+          Entraînement entretiens
+        </h1>
+        <p style={{ color: "var(--noir-400)", margin: "var(--sp-2) 0 0" }}>
+          Banque de questions curées (
+          <a
+            href="https://github.com/youssefHosni/Data-Science-Interview-Questions-Answers"
+            target="_blank"
+            rel="noreferrer"
+            style={{ color: "var(--amber-400)" }}
+          >
+            youssefHosni/Data-Science-Interview-Questions-Answers
+          </a>
+          ). Tu réponds librement, Ollama évalue ta réponse contre la référence et te donne des
+          indices sur demande.
         </p>
       </div>
 
       {err && (
-        <div className="error-banner">
-          <span className="error-banner__icon">
+        <Card variant="default" padding="md" style={{ marginBottom: "var(--sp-4)" }}>
+          <div style={{ display: "flex", gap: "var(--sp-2)", color: "var(--danger-400)" }}>
             <AlertCircle size={16} />
-          </span>
-          {err}
-        </div>
+            <span style={{ fontSize: "var(--text-sm)" }}>{err}</span>
+          </div>
+        </Card>
       )}
 
-      <div className="interviews-layout">
-        {/* Left panel — Context */}
-        <div className="interviews-panel">
-          <div className="interviews-panel__header">
-            <MessageSquare size={18} style={{ color: "var(--amber-400)" }} />
-            <span className="interviews-panel__title">Contexte</span>
-          </div>
-
-          <div
-            className="alice-input-group"
-            style={{ marginBottom: "var(--sp-4)" }}
-          >
-            <label className="alice-input-group__label">
-              Entreprise / dossier (optionnel)
-            </label>
-            <input
-              className="alice-input"
-              value={company}
-              onChange={(e) => setCompany(e.target.value)}
-              placeholder="ex : google, meta..."
-            />
-            <span className="alice-input-group__hint">
-              Filtre les problemes RAG par entreprise
-            </span>
-          </div>
-
-          <div className="alice-input-group">
-            <label className="alice-input-group__label">
-              Enonce du probleme (optionnel)
-            </label>
-            <textarea
-              className="alice-textarea"
-              value={problem}
-              onChange={(e) => setProblem(e.target.value)}
-              placeholder="Collez l'enonce ou decrivez le probleme. L'IA ajustera son contexte RAG en consequence."
-              rows={10}
-            />
-            {hasContext && (
-              <span
-                className="alice-input-group__hint"
-                style={{ color: "var(--success-500)" }}
-              >
-                Contexte RAG actif
-              </span>
-            )}
-          </div>
-
-          <div
-            style={{
-              marginTop: "var(--sp-4)",
-              padding: "var(--sp-3)",
-              background: "rgba(212, 160, 74, 0.06)",
-              borderRadius: "var(--radius-md)",
-              border: "1px solid rgba(212, 160, 74, 0.15)",
-            }}
-          >
-            <p
-              style={{
-                fontSize: "var(--text-xs)",
-                color: "var(--amber-400)",
-                margin: "0 0 var(--sp-2)",
-                fontWeight: 600,
-              }}
-            >
-              Conseils
-            </p>
-            <ul
-              style={{
-                fontSize: "var(--text-xs)",
-                color: "var(--noir-400)",
-                margin: 0,
-                paddingLeft: "var(--sp-4)",
-                lineHeight: "var(--leading-relaxed)",
-                display: "flex",
-                flexDirection: "column",
-                gap: "var(--sp-1)",
-              }}
-            >
-              <li>Pensez a voix haute — l'intervieweur s'adapte.</li>
-              <li>Posez des questions de clarification avant de coder.</li>
-              <li>Partagez votre complexite algorithmique.</li>
-              <li>Shift+Entree pour une nouvelle ligne dans le chat.</li>
-            </ul>
-          </div>
-        </div>
-
-        {/* Right panel — Chat */}
-        <Card variant="default" padding="none" className="interview-chat">
-          {/* Chat header */}
-          <div
-            style={{
-              padding: "var(--sp-4) var(--sp-5)",
-              borderBottom: "var(--border-subtle)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "var(--sp-2)",
-              }}
-            >
-              <Bot size={16} style={{ color: "var(--amber-400)" }} />
-              <span style={{ fontWeight: 600, fontSize: "var(--text-sm)" }}>
-                Intervieweur IA
-              </span>
-              <Badge variant="amber" size="sm">
-                Ollama Chat
-              </Badge>
+      {bankEmpty && (
+        <Card variant="amber" padding="lg" style={{ marginBottom: "var(--sp-5)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)" }}>
+            <BookOpen size={28} style={{ color: "var(--amber-400)" }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600 }}>Banque vide</div>
+              <div style={{ fontSize: "var(--text-sm)", color: "var(--noir-300)" }}>
+                Importe les questions depuis le repo GitHub pour commencer.
+              </div>
             </div>
-            {messages.length > 0 && (
-              <Button
-                variant="ghost"
-                size="sm"
-                icon={<Trash2 size={12} />}
-                onClick={clearChat}
-              >
-                Effacer
-              </Button>
-            )}
-          </div>
-
-          {/* Messages */}
-          <div className="interview-chat__messages">
-            {messages.length === 0 && (
-              <div className="interview-chat__empty">
-                <MessageSquare
-                  size={40}
-                  className="interview-chat__empty-icon"
-                />
-                <p style={{ fontSize: "var(--text-sm)" }}>
-                  Commencez a parler — l'intervieweur vous guide.
-                </p>
-                <p
-                  style={{
-                    fontSize: "var(--text-xs)",
-                    color: "var(--noir-500)",
-                  }}
-                >
-                  Essayez : "Bonjour, je suis pret pour l'entretien."
-                </p>
-              </div>
-            )}
-
-            {messages.map((msg, i) => (
-              <div
-                key={i}
-                className={`assistant-msg ${
-                  msg.role === "user"
-                    ? "assistant-msg--user"
-                    : "assistant-msg--ai"
-                }`}
-              >
-                <div
-                  className={`assistant-msg__avatar ${
-                    msg.role === "user"
-                      ? "assistant-msg__avatar--user"
-                      : "assistant-msg__avatar--ai"
-                  }`}
-                >
-                  {msg.role === "user" ? (
-                    <User size={14} />
-                  ) : (
-                    <Bot size={14} />
-                  )}
-                </div>
-                <div className="assistant-msg__bubble">
-                  {msg.role === "assistant" ? (
-                    <div className="md-content">
-                      <Markdown>{msg.content}</Markdown>
-                    </div>
-                  ) : (
-                    msg.content
-                  )}
-                </div>
-              </div>
-            ))}
-
-            {loading && (
-              <div className="assistant-msg assistant-msg--ai">
-                <div className="assistant-msg__avatar assistant-msg__avatar--ai">
-                  <Bot size={14} />
-                </div>
-                <div className="assistant-msg__bubble">
-                  <div style={{ display: "flex", gap: "var(--sp-1)" }}>
-                    <span style={{ animation: "pulse 1.2s ease infinite" }}>
-                      .
-                    </span>
-                    <span
-                      style={{
-                        animation: "pulse 1.2s ease infinite 0.2s",
-                      }}
-                    >
-                      .
-                    </span>
-                    <span
-                      style={{
-                        animation: "pulse 1.2s ease infinite 0.4s",
-                      }}
-                    >
-                      .
-                    </span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div ref={bottomRef} />
-          </div>
-
-          {/* Scroll hint when messages overflow */}
-          {messages.length > 3 && (
-            <div
-              style={{
-                position: "absolute",
-                bottom: 80,
-                right: "var(--sp-4)",
-                opacity: 0.4,
-                pointerEvents: "none",
-              }}
-            >
-              <ChevronDown size={16} />
-            </div>
-          )}
-
-          {/* Input */}
-          <div
-            style={{
-              padding: "var(--sp-3) var(--sp-4)",
-              borderTop: "var(--border-subtle)",
-              display: "flex",
-              gap: "var(--sp-3)",
-              alignItems: "flex-end",
-            }}
-          >
-            <textarea
-              className="alice-textarea"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Votre reponse… (Entree pour envoyer, Shift+Entree pour nouvelle ligne)"
-              rows={2}
-              style={{ flex: 1, minHeight: 56, resize: "none" }}
-              disabled={loading}
-            />
             <Button
               variant="primary"
-              size="md"
-              icon={<Send size={14} />}
-              disabled={loading || !input.trim()}
-              loading={loading}
-              onClick={sendMessage}
+              icon={importing ? <Loader2 size={16} className="spin" /> : <Download size={16} />}
+              onClick={importBank}
+              disabled={importing}
             >
-              Envoyer
+              {importing ? "Import en cours…" : "Importer la banque"}
             </Button>
           </div>
         </Card>
+      )}
+
+      {!bankEmpty && (
+        <Card variant="default" padding="md" style={{ marginBottom: "var(--sp-5)" }}>
+          <div style={{ display: "flex", gap: "var(--sp-3)", alignItems: "flex-end", flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: 220 }}>
+              <Select
+                label="Sujet"
+                value={topic}
+                onChange={(e) => setTopic(e.target.value)}
+                options={topicOptions}
+              />
+            </div>
+            <Button
+              variant="primary"
+              icon={loadingQ ? <Loader2 size={16} className="spin" /> : <Shuffle size={16} />}
+              onClick={pickRandom}
+              disabled={loadingQ || !topic}
+            >
+              {loadingQ ? "Tirage…" : "Nouvelle question"}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={importing ? <Loader2 size={14} className="spin" /> : <Download size={14} />}
+              onClick={importBank}
+              disabled={importing}
+              title="Ré-importer depuis GitHub"
+            >
+              {importing ? "Sync…" : "Ré-importer"}
+            </Button>
+          </div>
+          <div
+            style={{
+              marginTop: "var(--sp-3)",
+              fontSize: "var(--text-xs)",
+              color: "var(--noir-400)",
+            }}
+          >
+            {bankStatus?.count ?? 0} questions dans la banque ·{" "}
+            {bankStatus?.topics.length ?? 0} sujets
+          </div>
+        </Card>
+      )}
+
+      {question && (
+        <Card variant="default" padding="lg" style={{ marginBottom: "var(--sp-5)" }}>
+          <CardHeader>
+            <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)" }}>
+              <Badge variant="amber" size="sm">
+                {question.topic_label}
+              </Badge>
+              <Badge variant="default" size="sm">
+                Q{question.idx}
+              </Badge>
+            </div>
+          </CardHeader>
+          <div className="md-content" style={{ fontSize: "var(--text-base)" }}>
+            {md(question.question)}
+          </div>
+
+          <div style={{ marginTop: "var(--sp-4)" }}>
+            <label className="alice-input-group__label">Ta réponse</label>
+            <textarea
+              className="alice-textarea"
+              value={answer}
+              onChange={(e) => setAnswer(e.target.value)}
+              placeholder="Réponds ouvertement, comme en entretien. Structure ton raisonnement, cite les concepts clés."
+              rows={10}
+              style={{ marginTop: "var(--sp-1)" }}
+            />
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              gap: "var(--sp-2)",
+              marginTop: "var(--sp-3)",
+              flexWrap: "wrap",
+            }}
+          >
+            <Button
+              variant="primary"
+              icon={loadingGrade ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
+              onClick={submitAnswer}
+              disabled={loadingGrade || !answer.trim()}
+            >
+              {loadingGrade ? "Évaluation…" : "Soumettre"}
+            </Button>
+            <Button
+              variant="secondary"
+              icon={loadingHint ? <Loader2 size={16} className="spin" /> : <Lightbulb size={16} />}
+              onClick={requestHint}
+              disabled={loadingHint}
+            >
+              {loadingHint ? "Indice…" : "Indice"}
+            </Button>
+            <Button
+              variant="ghost"
+              icon={showReference ? <EyeOff size={16} /> : <Eye size={16} />}
+              onClick={() => setShowReference((v) => !v)}
+            >
+              {showReference ? "Masquer la référence" : "Voir la référence"}
+            </Button>
+          </div>
+
+          {hint && (
+            <Card variant="amber" padding="md" style={{ marginTop: "var(--sp-4)" }}>
+              <div
+                style={{
+                  display: "flex",
+                  gap: "var(--sp-2)",
+                  alignItems: "flex-start",
+                }}
+              >
+                <Lightbulb
+                  size={18}
+                  style={{ color: "var(--amber-400)", flexShrink: 0, marginTop: 2 }}
+                />
+                <div className="md-content" style={{ fontSize: "var(--text-sm)" }}>
+                  {md(hint)}
+                </div>
+              </div>
+            </Card>
+          )}
+
+          {evaluation && <EvaluationCard ev={evaluation} />}
+
+          {showReference && (
+            <Card variant="outlined" padding="md" style={{ marginTop: "var(--sp-4)" }}>
+              <div
+                style={{
+                  fontSize: "var(--text-xs)",
+                  color: "var(--noir-400)",
+                  marginBottom: "var(--sp-2)",
+                  letterSpacing: "0.05em",
+                  textTransform: "uppercase",
+                }}
+              >
+                Réponse de référence
+              </div>
+              <div className="md-content" style={{ fontSize: "var(--text-sm)" }}>
+                {md(question.reference_answer)}
+              </div>
+            </Card>
+          )}
+        </Card>
+      )}
+
+      {!question && !bankEmpty && !loadingBank && (
+        <Card variant="outlined" padding="lg">
+          <div
+            style={{
+              textAlign: "center",
+              color: "var(--noir-400)",
+              fontSize: "var(--text-sm)",
+            }}
+          >
+            Sélectionne un sujet et clique sur <strong>Nouvelle question</strong> pour commencer.
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function EvaluationCard({ ev }: { ev: Evaluation }) {
+  const score = typeof ev.score === "number" ? ev.score : null;
+  const scoreColor =
+    score === null
+      ? "var(--noir-300)"
+      : score >= 8
+        ? "var(--success-500)"
+        : score >= 5
+          ? "var(--amber-400)"
+          : "var(--danger-500)";
+
+  return (
+    <Card variant="elevated" padding="md" style={{ marginTop: "var(--sp-4)" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--sp-3)",
+          marginBottom: "var(--sp-3)",
+        }}
+      >
+        <div
+          style={{
+            fontFamily: "var(--font-display)",
+            fontWeight: 700,
+            fontSize: "var(--text-2xl)",
+            color: scoreColor,
+            minWidth: 60,
+          }}
+        >
+          {score !== null ? `${score}/10` : "—"}
+        </div>
+        <div style={{ fontSize: "var(--text-sm)", color: "var(--noir-200)" }}>{ev.verdict}</div>
       </div>
+
+      {ev.points_corrects?.length > 0 && (
+        <EvalList
+          title="Points corrects"
+          items={ev.points_corrects}
+          icon={<CheckCircle2 size={14} style={{ color: "var(--success-500)" }} />}
+        />
+      )}
+      {ev.points_manquants?.length > 0 && (
+        <EvalList
+          title="Points manquants"
+          items={ev.points_manquants}
+          icon={<AlertCircle size={14} style={{ color: "var(--amber-400)" }} />}
+        />
+      )}
+      {ev.erreurs?.length > 0 && (
+        <EvalList
+          title="Erreurs"
+          items={ev.erreurs}
+          icon={<XCircle size={14} style={{ color: "var(--danger-500)" }} />}
+        />
+      )}
+      {ev.enrichissement && (
+        <div style={{ marginTop: "var(--sp-3)" }}>
+          <div
+            style={{
+              fontSize: "var(--text-xs)",
+              color: "var(--noir-400)",
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+              marginBottom: "var(--sp-1)",
+            }}
+          >
+            Enrichissement
+          </div>
+          <div className="md-content" style={{ fontSize: "var(--text-sm)" }}>
+            <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+              {ev.enrichissement}
+            </Markdown>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function EvalList({
+  title,
+  items,
+  icon,
+}: {
+  title: string;
+  items: string[];
+  icon: React.ReactNode;
+}) {
+  return (
+    <div style={{ marginTop: "var(--sp-2)" }}>
+      <div
+        style={{
+          fontSize: "var(--text-xs)",
+          color: "var(--noir-400)",
+          textTransform: "uppercase",
+          letterSpacing: "0.05em",
+          marginBottom: "var(--sp-1)",
+        }}
+      >
+        {title}
+      </div>
+      <ul style={{ margin: 0, paddingLeft: 0, listStyle: "none" }}>
+        {items.map((it, i) => (
+          <li
+            key={i}
+            style={{
+              display: "flex",
+              gap: "var(--sp-2)",
+              alignItems: "flex-start",
+              padding: "var(--sp-1) 0",
+              fontSize: "var(--text-sm)",
+              color: "var(--noir-100)",
+            }}
+          >
+            <span style={{ flexShrink: 0, marginTop: 2 }}>{icon}</span>
+            <span>{it}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

@@ -15,7 +15,7 @@ from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from alice_server import ingest, notebooklm_gen, ollama, rag, store
+from alice_server import ingest, interview_bank, notebooklm_gen, ollama, rag, store
 from alice_server.config import (
     OLLAMA_HOST,
     OLLAMA_MODEL,
@@ -1027,3 +1027,160 @@ async def interview_chat(body: InterviewChatBody) -> dict[str, str]:
 
     reply = await ollama.chat(messages=history, system=system, temperature=0.6)
     return {"reply": reply}
+
+
+# ---------------------------------------------------------------------------
+# Interview bank (curated Q/A from youssefHosni/Data-Science-Interview-Questions-Answers)
+# ---------------------------------------------------------------------------
+
+@app.post("/api/interview/bank/import")
+async def interview_bank_import() -> dict[str, Any]:
+    """Fetch the upstream repo, parse every topic file, replace the local bank."""
+    data = await interview_bank.fetch_and_parse_all()
+    result = store.replace_interview_bank(data["items"])
+    return {
+        "inserted": result["inserted"],
+        "topics": data["topics"],
+    }
+
+
+@app.get("/api/interview/topics")
+def interview_topics() -> list[dict[str, Any]]:
+    return store.interview_topics()
+
+
+@app.get("/api/interview/bank/status")
+def interview_bank_status() -> dict[str, Any]:
+    return {
+        "count": store.interview_bank_count(),
+        "topics": store.interview_topics(),
+    }
+
+
+@app.get("/api/interview/question/random")
+def interview_question_random(topic: str | None = None) -> dict[str, Any]:
+    q = store.random_interview_question(topic=topic)
+    if not q:
+        raise HTTPException(
+            status_code=404,
+            detail="Banque vide. Importez d'abord avec POST /api/interview/bank/import.",
+        )
+    return q
+
+
+class InterviewHintBody(BaseModel):
+    question: str
+    reference_answer: str
+    user_answer: str = ""
+
+
+@app.post("/api/interview/open/hint")
+async def interview_open_hint(body: InterviewHintBody) -> dict[str, str]:
+    """Return a short guiding hint without revealing the answer."""
+    partial = body.user_answer.strip()
+    partial_block = (
+        f"Début de la réponse du candidat :\n{partial}\n\n" if partial else ""
+    )
+    system = (
+        "Tu es un coach d'entretien data science. Tu aides le candidat à progresser sans jamais "
+        "lui donner la réponse. Réponds en français, en 2 phrases maximum. Ton indice doit pointer "
+        "vers un concept clé ou une piste de raisonnement, sans citer directement la solution de "
+        "référence ni lister les points attendus."
+    )
+    prompt = f"""Question posée :
+{body.question}
+
+Réponse de référence (NE PAS la divulguer, même partiellement) :
+{body.reference_answer}
+
+{partial_block}Donne un indice court et utile (2 phrases max). Pas de liste. Pas de révélation."""
+    hint = await ollama.generate(prompt, system=system, temperature=0.5)
+    return {"hint": hint.strip()}
+
+
+class InterviewGradeBody(BaseModel):
+    question: str
+    reference_answer: str
+    user_answer: str
+    bank_id: int | None = None
+    topic: str | None = None
+
+
+@app.post("/api/interview/open/grade")
+async def interview_open_grade(body: InterviewGradeBody) -> dict[str, Any]:
+    """Strict critical evaluation of the candidate's open answer."""
+    system = (
+        "Tu es un intervieweur senior en data science, exigeant et direct mais constructif. "
+        "Tu évalues strictement la réponse du candidat par rapport à une réponse de référence. "
+        "Tu identifies les points corrects, les omissions, les erreurs factuelles, et tu enrichis "
+        "avec les subtilités attendues. Tu réponds UNIQUEMENT avec un objet JSON valide, en français."
+    )
+    prompt = f"""Question :
+{body.question}
+
+Réponse de référence :
+{body.reference_answer}
+
+Réponse du candidat :
+{body.user_answer}
+
+Évalue strictement. Retourne un JSON strict au format :
+{{
+  "score": <entier 0-10>,
+  "verdict": "<une phrase de synthèse>",
+  "points_corrects": ["..."],
+  "points_manquants": ["..."],
+  "erreurs": ["..."],
+  "enrichissement": "<paragraphe qui ajoute des subtilités, pièges classiques, ou nuances importantes>"
+}}
+
+Sois strict : on note sur 10, pas de complaisance. Un candidat qui oublie un concept clé ne dépasse pas 6/10."""
+    raw = await ollama.generate(prompt, system=system, temperature=0.3, force_json=True)
+
+    evaluation: dict[str, Any]
+    try:
+        evaluation = json.loads(raw)
+        if not isinstance(evaluation, dict):
+            raise ValueError("not a json object")
+    except (json.JSONDecodeError, ValueError):
+        evaluation = {
+            "score": None,
+            "verdict": "Évaluation brute (format JSON invalide)",
+            "points_corrects": [],
+            "points_manquants": [],
+            "erreurs": [],
+            "enrichissement": raw.strip(),
+        }
+
+    score = evaluation.get("score")
+    try:
+        score_val = float(score) if score is not None else None
+    except (TypeError, ValueError):
+        score_val = None
+
+    attempt_id: int | None = None
+    if body.topic:
+        attempt_id = store.record_interview_attempt(
+            bank_id=body.bank_id,
+            topic=body.topic,
+            question=body.question,
+            reference_answer=body.reference_answer,
+            user_answer=body.user_answer,
+            score=score_val,
+            evaluation=evaluation,
+        )
+
+    return {"evaluation": evaluation, "attempt_id": attempt_id}
+
+
+@app.get("/api/interview/history")
+def interview_history(topic: str | None = None) -> list[dict[str, Any]]:
+    return store.interview_history(topic=topic)
+
+
+@app.get("/api/interview/attempt/{attempt_id}")
+def interview_attempt(attempt_id: int) -> dict[str, Any]:
+    d = store.interview_attempt_detail(attempt_id)
+    if not d:
+        raise HTTPException(status_code=404, detail="Tentative introuvable")
+    return d
