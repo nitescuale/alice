@@ -1,16 +1,16 @@
 # ALICE — Adaptive Learning Interview Coaching Engine
 
-Application de révision & d'entraînement aux entretiens techniques : tu fournis des slides (PDF), ALICE en fait un cours structuré (via NotebookLM), puis génère des QCM, des sessions d'interview et un assistant RAG local sur tes chapitres — le tout avec un LLM Ollama local pour la partie interactive.
+Desktop app for studying and practicing technical interviews: feed it slides (PDF), ALICE turns them into a structured course (via NotebookLM), then generates quizzes, interview sessions, and a local RAG assistant over your chapters — all driven by a local Ollama LLM for the interactive parts.
 
-Stack : **Tauri 2** + **React** + **Python** (FastAPI, ChromaDB, sentence-transformers, Ollama, notebooklm-py).
+Stack: **Tauri 2** + **React** + **Python** (FastAPI, ChromaDB, sentence-transformers, Ollama, notebooklm-py).
 
-## Prérequis
+## Requirements
 
 - **Node.js** (npm)
 - **Python 3.11+**
-- **Rust** (pour `npm run tauri dev` / build `.exe`) — [install](https://rustup.rs/)
-- **Ollama** en local pour le LLM ([ollama.com](https://ollama.com)) — ex. `ollama pull gemma2:2b`
-- **Compte Google** avec accès à NotebookLM (pour la génération automatique de cours)
+- **Rust** (for `npm run tauri dev` / `.exe` build) — [install](https://rustup.rs/)
+- **Ollama** running locally for the LLM ([ollama.com](https://ollama.com)) — e.g. `ollama pull gemma2:2b`
+- **Google account** with NotebookLM access (for the automatic course generator)
 
 ## Installation
 
@@ -23,39 +23,39 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Premier lancement : les **embeddings** (`sentence-transformers`) seront téléchargés (une fois).
+First run: the **embeddings** (`sentence-transformers`) will be downloaded (once).
 
-## Lancer l’app (développement)
+## Run the app (development)
 
-Deux terminaux :
+Two terminals:
 
-1. **Backend** (port `8765`) :
+1. **Backend** (port `8765`):
 
 ```bash
 cd alice
 npm run dev:backend
 ```
 
-1. **Tauri + Vite** :
+1. **Tauri + Vite**:
 
 ```bash
 cd alice
 npm run tauri dev
 ```
 
-Ou une seule commande :
+Or a single command:
 
 ```bash
 npm run dev:full
 ```
 
-## Contenu des cours
+## Course content
 
-Deux manières d'ajouter un chapitre depuis l'écran **Importer** :
+Two ways to add a chapter from the **Import** screen:
 
-### 1. Mode automatique (recommandé) — via NotebookLM
+### 1. Automatic mode (recommended) — via NotebookLM
 
-Une seule fois, authentifier `notebooklm-py` dans un terminal (ouvre un navigateur) :
+One-time setup: authenticate `notebooklm-py` in a terminal (opens a browser):
 
 ```bash
 pip install "notebooklm-py[browser]"
@@ -63,38 +63,37 @@ playwright install chromium
 notebooklm login
 ```
 
-Ensuite dans l'app, onglet **Importer → Automatique** : uploader un fichier source (`.pdf`, `.md`, `.txt`, `.docx`), renseigner matière + chapitre, cliquer **Générer**. Pipeline en deux étapes :
+Then in the app, tab **Import → Automatic**: upload a source file (`.pdf`, `.md`, `.txt`, `.docx`), fill in subject + chapter, click **Generate**. Two-stage pipeline:
 
-1. **Source → Cours** : un notebook NotebookLM est créé à partir du fichier source, le cours markdown est généré (prompt : [subjects/NOTEBOOKLM_PROMPT.md](subjects/NOTEBOOKLM_PROMPT.md)) puis rangé sous `subjects/<matière>/<chapitre>/Cours.md`.
-2. **Cours → Quiz** : un second notebook (suffixe `[Cours]`) est créé avec **`Cours.md` comme seule source**, pour que le QCM ne référence que le contenu du cours généré (et pas des passages du PDF que NotebookLM avait filtrés).
+1. **Source → Course**: a NotebookLM notebook is created from the source file, the markdown course is generated (prompt: [subjects/NOTEBOOKLM_PROMPT.md](subjects/NOTEBOOKLM_PROMPT.md)) and saved under `subjects/<subject>/<chapter>/Cours.md`.
+2. **Course → Quiz**: a second notebook (suffix `[Cours]`) is created with **`Cours.md` as the only source**, so the quiz only references the generated course content (and not passages from the PDF that NotebookLM had filtered out).
 
-La taxonomie est mise à jour et le RAG réindexé. Compter 1–3 min par chapitre.
+The taxonomy is updated and the RAG re-indexed. Budget 1–3 min per chapter.
 
-### 2. Mode manuel — import d'un markdown existant
+### 2. Manual mode — import an existing markdown
 
-Onglet **Importer → Manuel** : coller le prompt dans NotebookLM à la main, uploader le markdown obtenu. Utile si la session NotebookLM n'est pas configurée, ou pour réimporter un cours déjà produit.
+Tab **Import → Manual**: paste the prompt into NotebookLM by hand, then upload the resulting markdown. Useful if the NotebookLM session is not set up, or to re-import a course you already produced.
 
-### Édition directe
+### Direct editing
 
-- Éditer `[subjects/taxonomy.yaml](subjects/taxonomy.yaml)` (matières → cours → chapitres).
-- Placer les fichiers par chapitre sous `subjects/...` (PDF, Markdown, `.ipynb`, `.py`).
-- Dans l’app : **Réindexer RAG** (écran Cours) après ajout de fichiers.
+- Edit [subjects/taxonomy.yaml](subjects/taxonomy.yaml) (subjects → courses → chapters).
+- Drop per-chapter files under `subjects/...` (PDF, Markdown, `.ipynb`, `.py`).
+- In the app: **Reindex RAG** (Courses screen) after adding files.
 
-### Suppression
+### Deletion
 
-- **Chapitre** : icône poubelle au survol dans l'arbre. Supprime uniquement le chapitre ; la matière reste (même vide).
-- **Matière** : icône poubelle au survol sur la ligne matière. Cascade — supprime tous les chapitres et leurs fichiers. Une matière peut aussi exister sans chapitre.
+- **Chapter**: trash icon on hover in the tree. Deletes only the chapter; the subject stays (even if empty).
+- **Subject**: trash icon on hover on the subject row. Cascading — deletes every chapter and their files. A subject can also exist without any chapter.
 
-## Réglages
+## Settings
 
-- **Réglages** : URL Ollama (défaut `http://127.0.0.1:11434`) et nom du modèle.
-- Variables d’environnement optionnelles : `OLLAMA_HOST`, `OLLAMA_MODEL`, `ALICE_SUBJECTS_ROOT`, `ALICE_CHROMA_PATH`, `ALICE_SQLITE_PATH`.
+- **Settings**: Ollama URL (default `http://127.0.0.1:11434`) and model name.
+- Optional environment variables: `OLLAMA_HOST`, `OLLAMA_MODEL`, `ALICE_SUBJECTS_ROOT`, `ALICE_CHROMA_PATH`, `ALICE_SQLITE_PATH`.
 
-## Build production (frontend web)
+## Production build (web frontend)
 
 ```bash
 npm run build
 ```
 
-Les assets sont dans `dist/`. L’UI appelle alors `http://127.0.0.1:8765` (backend à lancer à part).
-
+Assets end up in `dist/`. The UI then calls `http://127.0.0.1:8765` (backend must be started separately).
