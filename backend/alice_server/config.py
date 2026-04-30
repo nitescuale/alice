@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -40,18 +41,56 @@ PODCAST_INDEX_SECRET = os.environ.get("PODCAST_INDEX_SECRET", "")
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID", "")
 SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET", "")
 
-_runtime_pi_key: str | None = None
-_runtime_pi_secret: str | None = None
-_runtime_sp_id: str | None = None
-_runtime_sp_secret: str | None = None
+# Persisted credentials (gitignored). Env vars > on-disk file > empty.
+PODCAST_CREDS_PATH = Path(
+    os.environ.get("ALICE_PODCAST_CREDS_PATH", str(PROJECT_ROOT / ".alice_data" / "podcast_creds.json"))
+)
+
+
+def _load_persisted_podcast_creds() -> dict[str, str]:
+    try:
+        if PODCAST_CREDS_PATH.is_file():
+            return json.loads(PODCAST_CREDS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+_persisted = _load_persisted_podcast_creds()
+_runtime_pi_key: str | None = _persisted.get("podcast_index_key") or None
+_runtime_pi_secret: str | None = _persisted.get("podcast_index_secret") or None
+_runtime_sp_id: str | None = _persisted.get("spotify_client_id") or None
+_runtime_sp_secret: str | None = _persisted.get("spotify_client_secret") or None
 
 
 def get_podcast_index_creds() -> tuple[str, str]:
-    return (_runtime_pi_key or PODCAST_INDEX_KEY, _runtime_pi_secret or PODCAST_INDEX_SECRET)
+    # Env vars take precedence over persisted runtime values.
+    return (
+        PODCAST_INDEX_KEY or _runtime_pi_key or "",
+        PODCAST_INDEX_SECRET or _runtime_pi_secret or "",
+    )
 
 
 def get_spotify_creds() -> tuple[str, str]:
-    return (_runtime_sp_id or SPOTIFY_CLIENT_ID, _runtime_sp_secret or SPOTIFY_CLIENT_SECRET)
+    return (
+        SPOTIFY_CLIENT_ID or _runtime_sp_id or "",
+        SPOTIFY_CLIENT_SECRET or _runtime_sp_secret or "",
+    )
+
+
+def _persist_podcast_creds() -> None:
+    PODCAST_CREDS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "podcast_index_key": _runtime_pi_key or "",
+        "podcast_index_secret": _runtime_pi_secret or "",
+        "spotify_client_id": _runtime_sp_id or "",
+        "spotify_client_secret": _runtime_sp_secret or "",
+    }
+    PODCAST_CREDS_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    try:
+        os.chmod(PODCAST_CREDS_PATH, 0o600)
+    except Exception:
+        pass
 
 
 def set_podcast_runtime(
@@ -69,3 +108,4 @@ def set_podcast_runtime(
         _runtime_sp_id = sp_id.strip() or None
     if sp_secret is not None:
         _runtime_sp_secret = sp_secret.strip() or None
+    _persist_podcast_creds()

@@ -2,12 +2,15 @@
 
 GPU-only : refuse de tourner sans CUDA. Le modèle et le compute_type sont
 choisis dynamiquement selon la VRAM et la compute capability du GPU détecté.
+La détection passe par `nvidia-smi` (zéro dépendance Python).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -17,27 +20,53 @@ _model: Any = None
 _config: dict[str, Any] | None = None
 
 
-def _select_config() -> dict[str, Any]:
-    """Inspect the GPU and pick (model, compute_type). Raises if no CUDA."""
-    try:
-        import torch
-    except ImportError as e:
+def _query_nvidia_smi() -> tuple[str, int, float]:
+    """Returns (gpu_name, vram_mib, compute_capability) for the first GPU.
+
+    Raises RuntimeError if nvidia-smi is missing, fails, or no GPU is found.
+    """
+    if shutil.which("nvidia-smi") is None:
         raise RuntimeError(
-            "PyTorch n'est pas installé. La transcription requiert un GPU CUDA."
+            "Aucun GPU CUDA détecté (nvidia-smi introuvable). La transcription "
+            "des podcasts est GPU-only (faster-whisper sur CPU est trop lent)."
+        )
+    try:
+        out = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,memory.total,compute_cap",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        raise RuntimeError(
+            f"nvidia-smi a échoué : {e}. Driver NVIDIA installé mais non fonctionnel ?"
         ) from e
 
-    if not torch.cuda.is_available():
-        raise RuntimeError(
-            "Aucun GPU CUDA détecté. La transcription des podcasts est GPU-only "
-            "(faster-whisper sur CPU est trop lent pour être utilisable)."
-        )
+    line = next((ln.strip() for ln in out.stdout.splitlines() if ln.strip()), "")
+    if not line:
+        raise RuntimeError("nvidia-smi n'a retourné aucun GPU.")
 
-    props = torch.cuda.get_device_properties(0)
-    vram_gb = props.total_memory / (1024**3)
-    cc = torch.cuda.get_device_capability(0)
-    cc_major, cc_minor = cc
-    cc_val = cc_major + cc_minor / 10
-    name = props.name
+    parts = [p.strip() for p in line.split(",")]
+    if len(parts) < 3:
+        raise RuntimeError(f"nvidia-smi: format inattendu '{line}'.")
+    name = parts[0]
+    try:
+        vram_mib = int(parts[1])
+        cc_val = float(parts[2])
+    except ValueError as e:
+        raise RuntimeError(f"nvidia-smi: parsing impossible de '{line}'.") from e
+    return name, vram_mib, cc_val
+
+
+def _select_config() -> dict[str, Any]:
+    """Inspect the GPU and pick (model, compute_type). Raises if no CUDA."""
+    name, vram_mib, cc_val = _query_nvidia_smi()
+    vram_gb = vram_mib / 1024
 
     if cc_val < 6.0:
         raise RuntimeError(

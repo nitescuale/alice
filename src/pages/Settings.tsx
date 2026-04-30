@@ -268,8 +268,9 @@ export function Settings() {
               <p style={{ fontSize: "var(--text-sm)", color: "var(--noir-300)" }}>
                 Crée une clé gratuite sur{" "}
                 <code>podcastindex.org</code> et une app Spotify Developer
-                (Client Credentials). Les valeurs ne sont pas persistées sur
-                disque — elles vivent dans le processus backend.
+                (Client Credentials). Les valeurs sont sauvegardées dans{" "}
+                <code>.alice_data/podcast_creds.json</code> (gitignored,
+                permissions 0600) et rechargées au démarrage du backend.
               </p>
               <Input
                 label="Podcast Index — Key"
