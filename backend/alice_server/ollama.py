@@ -15,15 +15,19 @@ async def generate(
     model: str | None = None,
     temperature: float = 0.4,
     force_json: bool = False,
+    num_predict: int | None = None,
 ) -> str:
     m = model or get_ollama_model()
     host = get_ollama_host()
     url = f"{host.rstrip('/')}/api/generate"
+    options: dict[str, Any] = {"temperature": temperature}
+    if num_predict is not None:
+        options["num_predict"] = num_predict
     payload: dict[str, Any] = {
         "model": m,
         "prompt": prompt,
         "stream": False,
-        "options": {"temperature": temperature},
+        "options": options,
     }
     if system:
         payload["system"] = system

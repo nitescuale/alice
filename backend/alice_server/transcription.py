@@ -8,6 +8,7 @@ La détection passe par `nvidia-smi` (zéro dépendance Python).
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 import shutil
 import subprocess
@@ -137,7 +138,9 @@ def _transcribe_sync(
         str(audio_path),
         language=language,
         vad_filter=True,
-        beam_size=5,
+        vad_parameters={"min_silence_duration_ms": 500},
+        beam_size=1,
+        condition_on_previous_text=False,
     )
     duration = float(info.duration) if info.duration else 0.0
     segments: list[dict[str, Any]] = []
@@ -167,3 +170,18 @@ async def transcribe(
     return await loop.run_in_executor(
         None, _transcribe_sync, audio_path, language, progress_cb
     )
+
+
+def unload_model() -> None:
+    """Drop the Whisper model from memory + free CUDA VRAM.
+
+    Lets Ollama reclaim the GPU for the LLM cleanup pass on shared-GPU
+    setups (RTX 2060 6GB etc.). Next transcribe() reloads from disk
+    (~5-10s extra).
+    """
+    global _model
+    if _model is None:
+        return
+    logger.info("Whisper: unloading model to free VRAM")
+    _model = None
+    gc.collect()

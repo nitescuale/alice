@@ -11,9 +11,11 @@ to its dedup-only text. The whole job never fails because of the LLM step.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
+import time
 from typing import Any, Awaitable, Callable
 
 from alice_server import ollama
@@ -22,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 30
 PREV_CONTEXT = 2
+CHUNK_TIMEOUT_SEC = 30.0
+NUM_PREDICT = 800
 
 ProgressCb = Callable[[int, int], Awaitable[None] | None]
 
@@ -121,12 +125,23 @@ async def _polish_chunk(
 ) -> list[str]:
     prompt = _build_prompt(chunk, chunk_start_idx, prev_tail, language)
     try:
-        raw = await ollama.generate(
-            prompt,
-            system=_SYSTEM_PROMPT,
-            temperature=0.2,
-            force_json=True,
+        raw = await asyncio.wait_for(
+            ollama.generate(
+                prompt,
+                system=_SYSTEM_PROMPT,
+                temperature=0.2,
+                force_json=True,
+                num_predict=NUM_PREDICT,
+            ),
+            timeout=CHUNK_TIMEOUT_SEC,
         )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "polish chunk %d timed out after %.0fs, falling back",
+            chunk_start_idx,
+            CHUNK_TIMEOUT_SEC,
+        )
+        return [seg.get("text", "") for seg in chunk]
     except Exception as exc:  # noqa: BLE001
         logger.warning("polish chunk %d failed (ollama error): %s", chunk_start_idx, exc)
         return [seg.get("text", "") for seg in chunk]
@@ -159,7 +174,10 @@ async def polish_segments(
     out: list[dict[str, Any]] = [dict(s) for s in segments]
     for done, (start_idx, chunk) in enumerate(chunks, start=1):
         prev_tail = segments[max(0, start_idx - PREV_CONTEXT) : start_idx]
+        t0 = time.monotonic()
         cleaned_texts = await _polish_chunk(chunk, start_idx, prev_tail, language)
+        elapsed = time.monotonic() - t0
+        logger.info("polish chunk %d/%d done in %.1fs", done, total, elapsed)
         for k, text in enumerate(cleaned_texts):
             out[start_idx + k]["text"] = text.strip()
         if progress_cb is not None:

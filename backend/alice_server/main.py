@@ -1398,6 +1398,9 @@ async def _process_podcast(row_id: int, spotify_url: str) -> None:
             audio_path, language=None, progress_cb=_on_tr
         )
 
+        # Free Whisper VRAM so Ollama can run the cleanup pass on full GPU.
+        transcription.unload_model()
+
         _set_job(row_id, "cleaning", "Nettoyage du transcript (dedup + LLM)…", progress=0.0)
         store.update_podcast_status(row_id, "cleaning")
 
