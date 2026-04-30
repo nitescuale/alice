@@ -626,13 +626,21 @@ def update_podcast_metadata(
     published_at: str | None,
     duration_sec: int | None,
     audio_url: str | None,
+    language: str | None = None,
 ) -> None:
     with get_conn() as conn:
-        conn.execute(
-            "UPDATE podcast_transcripts SET show_name = ?, episode_title = ?, "
-            "published_at = ?, duration_sec = ?, audio_url = ? WHERE id = ?",
-            (show_name, episode_title, published_at, duration_sec, audio_url, row_id),
-        )
+        if language is not None:
+            conn.execute(
+                "UPDATE podcast_transcripts SET show_name = ?, episode_title = ?, "
+                "published_at = ?, duration_sec = ?, audio_url = ?, language = ? WHERE id = ?",
+                (show_name, episode_title, published_at, duration_sec, audio_url, language, row_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE podcast_transcripts SET show_name = ?, episode_title = ?, "
+                "published_at = ?, duration_sec = ?, audio_url = ? WHERE id = ?",
+                (show_name, episode_title, published_at, duration_sec, audio_url, row_id),
+            )
 
 
 def finalize_podcast_transcript(

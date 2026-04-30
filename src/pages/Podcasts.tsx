@@ -133,6 +133,7 @@ export function Podcasts() {
   const [, setTick] = useState(0);
   const pollRef = useRef<number | null>(null);
   const tickRef = useRef<number | null>(null);
+  const metaSeenRef = useRef<Set<number>>(new Set());
 
   async function loadList() {
     try {
@@ -203,13 +204,20 @@ export function Podcasts() {
         );
         const map: Record<number, JobStatus> = { ...jobs };
         let anyDone = false;
+        let anyMetaReady = false;
         for (const j of updates) {
           if (!j) continue;
           map[j.id] = j;
           if (j.status === "done" || j.status === "error") anyDone = true;
+          const metaReady =
+            j.stage !== "pending" && j.stage !== "resolving" && j.stage !== "error";
+          if (metaReady && !metaSeenRef.current.has(j.id)) {
+            metaSeenRef.current.add(j.id);
+            anyMetaReady = true;
+          }
         }
         setJobs(map);
-        if (anyDone) loadList();
+        if (anyDone || anyMetaReady) loadList();
       } catch {
         // ignore
       }

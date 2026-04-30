@@ -1461,6 +1461,24 @@ async def podcasts_fetch(body: PodcastFetchBody) -> dict[str, Any]:
     except sqlite3.IntegrityError:
         raise HTTPException(409, "Ce podcast est déjà dans la bibliothèque.")
 
+    # Best-effort: fetch Spotify metadata synchronously so the card displays
+    # title/show/date/duration immediately. Background task re-fetches and
+    # fills audio_url after Podcast Index resolution.
+    try:
+        sp_meta = await spotify_client.get_episode(episode_id)
+        sp_lang = (sp_meta.get("language") or "").split("-")[0].lower() or None
+        store.update_podcast_metadata(
+            row_id,
+            show_name=sp_meta.get("show_name", ""),
+            episode_title=sp_meta.get("name", ""),
+            published_at=sp_meta.get("release_date") or None,
+            duration_sec=int(sp_meta.get("duration_ms", 0) / 1000) or None,
+            audio_url=None,
+            language=sp_lang,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
     asyncio.create_task(_process_podcast(row_id, url))
     return {"id": row_id, "status": "pending"}
 
