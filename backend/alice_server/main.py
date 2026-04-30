@@ -5,25 +5,41 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import sqlite3
+import tempfile
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import httpx
 import yaml
 
 from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from alice_server import ingest, interview_bank, notebooklm_gen, ollama, rag, store
+from alice_server import (
+    ingest,
+    interview_bank,
+    notebooklm_gen,
+    ollama,
+    podcast_index,
+    rag,
+    spotify_client,
+    store,
+    transcription,
+)
 from alice_server.config import (
     OLLAMA_HOST,
     OLLAMA_MODEL,
     SUBJECTS_ROOT,
     get_ollama_host,
     get_ollama_model,
+    get_podcast_index_creds,
+    get_spotify_creds,
     set_ollama_runtime,
+    set_podcast_runtime,
 )
 from alice_server.extract import extract_file
 from alice_server import github_import
@@ -1051,11 +1067,14 @@ async def _translate_bank_in_background() -> None:
         started_at=datetime.utcnow().isoformat(), finished_at=None, error=None,
     )
     try:
-        rows = store.list_untranslated_questions()
-        _translation_progress["total"] = len(rows)
+        q_rows = store.list_untranslated_questions()
+        a_rows = store.list_untranslated_answers()
+        _translation_progress["total"] = len(q_rows) + len(a_rows)
         batch_size = 10
-        for start in range(0, len(rows), batch_size):
-            chunk = rows[start : start + batch_size]
+        done = 0
+        # Questions first.
+        for start in range(0, len(q_rows), batch_size):
+            chunk = q_rows[start : start + batch_size]
             # Translate only the natural-language prefix — anything after the
             # first blank line (image, table) must be preserved verbatim.
             split = [interview_bank.split_question_body(r["question"]) for r in chunk]
@@ -1072,7 +1091,27 @@ async def _translate_bank_in_background() -> None:
                 store.update_bank_questions(
                     [(r["id"], t) for r, t in zip(chunk, merged)]
                 )
-            _translation_progress["done"] = start + len(chunk)
+            done += len(chunk)
+            _translation_progress["done"] = done
+        # Reference answers next, same prefix/attachment split.
+        for start in range(0, len(a_rows), batch_size):
+            chunk = a_rows[start : start + batch_size]
+            split = [interview_bank.split_question_body(r["reference_answer"]) for r in chunk]
+            texts = [s[0] for s in split]
+            try:
+                fr = await interview_bank._translate_batch(texts)
+            except Exception:
+                fr = texts
+            if len(fr) == len(chunk):
+                merged = [
+                    f"{fr_text}\n\n{att}" if att else fr_text
+                    for fr_text, (_, att) in zip(fr, split)
+                ]
+                store.update_bank_answers(
+                    [(r["id"], t) for r, t in zip(chunk, merged)]
+                )
+            done += len(chunk)
+            _translation_progress["done"] = done
     except Exception as exc:
         _translation_progress["error"] = str(exc)
     finally:
@@ -1087,7 +1126,7 @@ async def interview_bank_import() -> dict[str, Any]:
         raise HTTPException(status_code=409, detail="Traduction déjà en cours.")
     data = await interview_bank.fetch_and_parse_all(translate=False)
     result = store.replace_interview_bank(data["items"])
-    pending = len(store.list_untranslated_questions())
+    pending = len(store.list_untranslated_questions()) + len(store.list_untranslated_answers())
     translation_state = "idle"
     if pending > 0:
         _translation_progress.update(
@@ -1245,3 +1284,202 @@ def interview_attempt(attempt_id: int) -> dict[str, Any]:
     if not d:
         raise HTTPException(status_code=404, detail="Tentative introuvable")
     return d
+
+
+# ---------------------------------------------------------------------------
+# Podcast transcripts (Spotify URL -> Podcast Index RSS -> faster-whisper GPU)
+# ---------------------------------------------------------------------------
+
+_podcast_jobs: dict[int, dict[str, Any]] = {}
+
+
+def _job_state(row_id: int) -> dict[str, Any]:
+    return _podcast_jobs.setdefault(
+        row_id,
+        {"stage": "pending", "message": "", "error": None},
+    )
+
+
+def _set_job(row_id: int, stage: str, message: str = "", error: str | None = None) -> None:
+    j = _job_state(row_id)
+    j["stage"] = stage
+    j["message"] = message
+    j["error"] = error
+
+
+async def _download_audio(url: str, dest: Path) -> None:
+    async with httpx.AsyncClient(follow_redirects=True, timeout=120.0) as client:
+        async with client.stream("GET", url) as r:
+            r.raise_for_status()
+            with dest.open("wb") as f:
+                async for chunk in r.aiter_bytes(chunk_size=1 << 16):
+                    if chunk:
+                        f.write(chunk)
+
+
+async def _process_podcast(row_id: int, spotify_url: str) -> None:
+    audio_path: Path | None = None
+    tmpdir: tempfile.TemporaryDirectory | None = None
+    try:
+        _set_job(row_id, "resolving", "Résolution Spotify + Podcast Index…")
+        store.update_podcast_status(row_id, "resolving")
+
+        episode_id = spotify_client.extract_episode_id(spotify_url)
+        sp_meta = await spotify_client.get_episode(episode_id)
+        pi_ep = await podcast_index.resolve_spotify_episode(sp_meta)
+        if not pi_ep:
+            raise RuntimeError(
+                "Épisode introuvable dans Podcast Index (probable exclusivité Spotify)."
+            )
+        enclosure = pi_ep.get("enclosureUrl") or ""
+        if not enclosure:
+            raise RuntimeError("Aucune URL audio (enclosure) trouvée dans le flux RSS.")
+
+        store.update_podcast_metadata(
+            row_id,
+            show_name=sp_meta.get("show_name", ""),
+            episode_title=sp_meta.get("name", ""),
+            published_at=sp_meta.get("release_date") or None,
+            duration_sec=int(sp_meta.get("duration_ms", 0) / 1000) or None,
+            audio_url=enclosure,
+        )
+
+        _set_job(row_id, "downloading", "Téléchargement de l'audio…")
+        store.update_podcast_status(row_id, "downloading")
+        tmpdir = tempfile.TemporaryDirectory(prefix="alice_pod_")
+        audio_path = Path(tmpdir.name) / "audio.mp3"
+        await _download_audio(enclosure, audio_path)
+
+        _set_job(row_id, "transcribing", "Transcription faster-whisper…")
+        store.update_podcast_status(row_id, "transcribing")
+        result = await transcription.transcribe(audio_path, language=None)
+
+        store.finalize_podcast_transcript(
+            row_id,
+            language=result["language"],
+            segments=result["segments"],
+            model_used=result["model_used"],
+        )
+        _set_job(row_id, "done", "Transcript prêt.")
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc) or exc.__class__.__name__
+        store.update_podcast_status(row_id, "error", error=msg)
+        _set_job(row_id, "error", "", error=msg)
+    finally:
+        if tmpdir is not None:
+            tmpdir.cleanup()
+
+
+class PodcastFetchBody(BaseModel):
+    spotify_url: str
+
+
+@app.post("/api/podcasts/fetch")
+async def podcasts_fetch(body: PodcastFetchBody) -> dict[str, Any]:
+    url = body.spotify_url.strip()
+    if not url:
+        raise HTTPException(422, "URL Spotify requise.")
+    try:
+        episode_id = spotify_client.extract_episode_id(url)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    pi_key, pi_secret = get_podcast_index_creds()
+    sp_id, sp_secret = get_spotify_creds()
+    if not (pi_key and pi_secret):
+        raise HTTPException(422, "Credentials Podcast Index manquants (Settings).")
+    if not (sp_id and sp_secret):
+        raise HTTPException(422, "Credentials Spotify manquants (Settings).")
+
+    try:
+        row_id = store.insert_podcast_pending(url, episode_id)
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, "Ce podcast est déjà dans la bibliothèque.")
+
+    asyncio.create_task(_process_podcast(row_id, url))
+    return {"id": row_id, "status": "pending"}
+
+
+@app.get("/api/podcasts/list")
+def podcasts_list() -> list[dict[str, Any]]:
+    return store.list_podcast_transcripts()
+
+
+@app.get("/api/podcasts/search")
+def podcasts_search(q: str = "") -> list[dict[str, Any]]:
+    return store.search_podcast_transcripts(q)
+
+
+@app.get("/api/podcasts/{row_id}")
+def podcasts_detail(row_id: int) -> dict[str, Any]:
+    d = store.get_podcast_transcript(row_id)
+    if not d:
+        raise HTTPException(404, "Podcast introuvable.")
+    return d
+
+
+@app.get("/api/podcasts/{row_id}/status")
+def podcasts_status(row_id: int) -> dict[str, Any]:
+    d = store.get_podcast_transcript(row_id)
+    if not d:
+        raise HTTPException(404, "Podcast introuvable.")
+    job = _podcast_jobs.get(row_id, {"stage": d["status"], "message": "", "error": d.get("error")})
+    return {
+        "id": row_id,
+        "status": d["status"],
+        "stage": job.get("stage", d["status"]),
+        "message": job.get("message", ""),
+        "error": job.get("error") or d.get("error"),
+    }
+
+
+@app.delete("/api/podcasts/{row_id}")
+def podcasts_delete(row_id: int) -> dict[str, bool]:
+    n = store.delete_podcast_transcript(row_id)
+    _podcast_jobs.pop(row_id, None)
+    if not n:
+        raise HTTPException(404, "Podcast introuvable.")
+    return {"ok": True}
+
+
+@app.get("/api/podcasts/transcription/info")
+def podcasts_transcription_info() -> dict[str, Any]:
+    """Probe GPU + return the model that will be used."""
+    try:
+        cfg = transcription.get_config()
+        return {"available": True, **cfg}
+    except RuntimeError as exc:
+        return {"available": False, "error": str(exc)}
+
+
+class PodcastSettingsBody(BaseModel):
+    podcast_index_key: str | None = None
+    podcast_index_secret: str | None = None
+    spotify_client_id: str | None = None
+    spotify_client_secret: str | None = None
+
+
+@app.get("/api/settings/podcasts")
+def podcasts_settings_get() -> dict[str, bool]:
+    pi_key, pi_secret = get_podcast_index_creds()
+    sp_id, sp_secret = get_spotify_creds()
+    return {
+        "podcast_index_configured": bool(pi_key and pi_secret),
+        "spotify_configured": bool(sp_id and sp_secret),
+    }
+
+
+@app.post("/api/settings/podcasts")
+def podcasts_settings_post(body: PodcastSettingsBody) -> dict[str, bool]:
+    set_podcast_runtime(
+        pi_key=body.podcast_index_key,
+        pi_secret=body.podcast_index_secret,
+        sp_id=body.spotify_client_id,
+        sp_secret=body.spotify_client_secret,
+    )
+    pi_key, pi_secret = get_podcast_index_creds()
+    sp_id, sp_secret = get_spotify_creds()
+    return {
+        "podcast_index_configured": bool(pi_key and pi_secret),
+        "spotify_configured": bool(sp_id and sp_secret),
+    }

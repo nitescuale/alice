@@ -16,6 +16,7 @@ import {
   Sparkles,
   BookOpen,
   ArrowUp,
+  Languages,
 } from "lucide-react";
 import { api } from "../api";
 import { Card, CardHeader } from "../components/Card";
@@ -51,7 +52,9 @@ interface BankQuestion {
   source_path: string;
   idx: number;
   question: string;
+  question_en: string;
   reference_answer: string;
+  reference_answer_en: string;
 }
 
 interface Evaluation {
@@ -87,6 +90,7 @@ export function Interviews() {
   const [hint, setHint] = useState<string>("");
   const [showReference, setShowReference] = useState(false);
   const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
+  const [lang, setLang] = useState<"fr" | "en">("fr");
 
   const [loadingBank, setLoadingBank] = useState(false);
   const [loadingQ, setLoadingQ] = useState(false);
@@ -128,7 +132,18 @@ export function Interviews() {
     setShowReference(false);
     setEvaluation(null);
     setErr("");
+    setLang("fr");
   };
+
+  const displayQ =
+    lang === "en" && question?.question_en
+      ? question.question_en
+      : question?.question ?? "";
+  const displayRef =
+    lang === "en" && question?.reference_answer_en
+      ? question.reference_answer_en
+      : question?.reference_answer ?? "";
+  const enAvailable = !!(question?.question_en && question?.reference_answer_en);
 
   const importBank = async () => {
     setImporting(true);
@@ -168,8 +183,8 @@ export function Interviews() {
       const r = await api<{ hint: string }>("/api/interview/open/hint", {
         method: "POST",
         body: JSON.stringify({
-          question: question.question,
-          reference_answer: question.reference_answer,
+          question: displayQ,
+          reference_answer: displayRef,
           user_answer: answer,
         }),
       });
@@ -191,8 +206,8 @@ export function Interviews() {
         {
           method: "POST",
           body: JSON.stringify({
-            question: question.question,
-            reference_answer: question.reference_answer,
+            question: displayQ,
+            reference_answer: displayRef,
             user_answer: answer,
             bank_id: question.id,
             topic: question.topic,
@@ -346,17 +361,35 @@ export function Interviews() {
       {question && (
         <Card variant="default" padding="lg" style={{ marginBottom: "var(--sp-5)" }}>
           <CardHeader>
-            <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)" }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "var(--sp-2)",
+                width: "100%",
+              }}
+            >
               <Badge variant="amber" size="sm">
                 {question.topic_label}
               </Badge>
               <Badge variant="default" size="sm">
                 Q{question.idx}
               </Badge>
+              <Button
+                variant="ghost"
+                size="sm"
+                icon={<Languages size={14} />}
+                onClick={() => setLang((l) => (l === "fr" ? "en" : "fr"))}
+                disabled={!enAvailable}
+                title={enAvailable ? "Basculer FR/EN" : "VO non disponible (ré-importer)"}
+                style={{ marginLeft: "auto" }}
+              >
+                {lang === "fr" ? "EN" : "FR"}
+              </Button>
             </div>
           </CardHeader>
           <div className="md-content" style={{ fontSize: "var(--text-base)" }}>
-            {md(question.question)}
+            {md(displayQ)}
           </div>
 
           <div style={{ marginTop: "var(--sp-4)" }}>
@@ -440,7 +473,7 @@ export function Interviews() {
                 Réponse de référence
               </div>
               <div className="md-content" style={{ fontSize: "var(--text-sm)" }}>
-                {md(question.reference_answer)}
+                {md(displayRef)}
               </div>
             </Card>
           )}

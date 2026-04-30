@@ -9,3 +9,5 @@ python-multipart>=0.0.9
 pyyaml>=6.0.1
 nbformat>=5.10.0
 notebooklm-py>=0.1.0
+faster-whisper>=1.1.0
+feedparser>=6.0

@@ -8,6 +8,8 @@ import {
   AlertCircle,
   CheckCircle2,
   FolderOpen,
+  Podcast,
+  KeyRound,
 } from "lucide-react";
 import { api } from "../api";
 import { Card, CardHeader, CardBody } from "../components/Card";
@@ -22,12 +24,31 @@ export function Settings() {
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
 
+  const [piKey, setPiKey] = useState("");
+  const [piSecret, setPiSecret] = useState("");
+  const [spId, setSpId] = useState("");
+  const [spSecret, setSpSecret] = useState("");
+  const [podcastConfigured, setPodcastConfigured] = useState({
+    podcast_index: false,
+    spotify: false,
+  });
+
   useEffect(() => {
     api<{ ollama_host: string; ollama_model: string }>("/api/settings")
       .then((s) => {
         setHost(s.ollama_host);
         setModel(s.ollama_model);
       })
+      .catch(() => {});
+    api<{ podcast_index_configured: boolean; spotify_configured: boolean }>(
+      "/api/settings/podcasts",
+    )
+      .then((s) =>
+        setPodcastConfigured({
+          podcast_index: s.podcast_index_configured,
+          spotify: s.spotify_configured,
+        }),
+      )
       .catch(() => {});
   }, []);
 
@@ -40,6 +61,36 @@ export function Settings() {
         body: JSON.stringify({ ollama_host: host, ollama_model: model }),
       });
       setMsg("Reglages enregistres (session backend).");
+    } catch (e) {
+      setErr(String(e));
+    }
+  }
+
+  async function savePodcastCreds() {
+    setErr("");
+    setMsg("");
+    try {
+      const r = await api<{
+        podcast_index_configured: boolean;
+        spotify_configured: boolean;
+      }>("/api/settings/podcasts", {
+        method: "POST",
+        body: JSON.stringify({
+          podcast_index_key: piKey || null,
+          podcast_index_secret: piSecret || null,
+          spotify_client_id: spId || null,
+          spotify_client_secret: spSecret || null,
+        }),
+      });
+      setPodcastConfigured({
+        podcast_index: r.podcast_index_configured,
+        spotify: r.spotify_configured,
+      });
+      setPiKey("");
+      setPiSecret("");
+      setSpId("");
+      setSpSecret("");
+      setMsg("Credentials Podcasts enregistrés.");
     } catch (e) {
       setErr(String(e));
     }
@@ -174,6 +225,99 @@ export function Settings() {
                   onClick={refreshModels}
                 >
                   Rafraichir les modeles
+                </Button>
+              </div>
+            </div>
+          </CardBody>
+        </Card>
+
+        {/* Podcasts credentials */}
+        <Card variant="default" padding="none">
+          <CardHeader>
+            <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)" }}>
+              <Podcast size={18} style={{ color: "var(--amber-400)" }} />
+              <span style={{ fontWeight: 600, fontSize: "var(--text-md)" }}>
+                Podcasts
+              </span>
+            </div>
+            <div style={{ display: "flex", gap: "var(--sp-2)" }}>
+              <Badge
+                variant={podcastConfigured.podcast_index ? "success" : "danger"}
+                size="sm"
+              >
+                Podcast Index{" "}
+                {podcastConfigured.podcast_index ? "OK" : "manquant"}
+              </Badge>
+              <Badge
+                variant={podcastConfigured.spotify ? "success" : "danger"}
+                size="sm"
+              >
+                Spotify {podcastConfigured.spotify ? "OK" : "manquant"}
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardBody>
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "var(--sp-4)",
+                padding: "0 var(--sp-5) var(--sp-5)",
+              }}
+            >
+              <p style={{ fontSize: "var(--text-sm)", color: "var(--noir-300)" }}>
+                Crée une clé gratuite sur{" "}
+                <code>podcastindex.org</code> et une app Spotify Developer
+                (Client Credentials). Les valeurs ne sont pas persistées sur
+                disque — elles vivent dans le processus backend.
+              </p>
+              <Input
+                label="Podcast Index — Key"
+                icon={<KeyRound size={14} />}
+                type="password"
+                value={piKey}
+                onChange={(e) => setPiKey(e.target.value)}
+                placeholder={
+                  podcastConfigured.podcast_index ? "•••••• (configurée)" : ""
+                }
+              />
+              <Input
+                label="Podcast Index — Secret"
+                icon={<KeyRound size={14} />}
+                type="password"
+                value={piSecret}
+                onChange={(e) => setPiSecret(e.target.value)}
+                placeholder={
+                  podcastConfigured.podcast_index ? "•••••• (configurée)" : ""
+                }
+              />
+              <Input
+                label="Spotify — Client ID"
+                icon={<KeyRound size={14} />}
+                type="password"
+                value={spId}
+                onChange={(e) => setSpId(e.target.value)}
+                placeholder={
+                  podcastConfigured.spotify ? "•••••• (configurée)" : ""
+                }
+              />
+              <Input
+                label="Spotify — Client Secret"
+                icon={<KeyRound size={14} />}
+                type="password"
+                value={spSecret}
+                onChange={(e) => setSpSecret(e.target.value)}
+                placeholder={
+                  podcastConfigured.spotify ? "•••••• (configurée)" : ""
+                }
+              />
+              <div className="settings-actions">
+                <Button
+                  variant="primary"
+                  icon={<Save size={14} />}
+                  onClick={savePodcastCreds}
+                >
+                  Enregistrer Podcasts
                 </Button>
               </div>
             </div>

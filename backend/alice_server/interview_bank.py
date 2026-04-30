@@ -175,6 +175,15 @@ def parse_topic_md(text: str) -> list[dict[str, Any]]:
 
         answer = "\n".join(answer_lines).strip()
         answer = re.sub(r"^\s*\**Answer\**\s*:\s*", "", answer, flags=re.IGNORECASE).strip()
+
+        # If no prose answer was found but we collected an image/table block,
+        # that block IS the answer (some questions are fully diagrammatic).
+        # Otherwise the attachment describes the data the question refers to
+        # and stays attached to the question.
+        if not answer and attachment:
+            answer = "\n".join(attachment).strip()
+            attachment = []
+
         answer = _rewrite_image_urls(answer)
 
         question_full = cur_q

@@ -69,6 +69,24 @@ def init_db() -> None:
                 created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_ia_topic ON interview_attempts(topic);
+            CREATE TABLE IF NOT EXISTS podcast_transcripts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                spotify_url TEXT NOT NULL UNIQUE,
+                spotify_episode_id TEXT NOT NULL,
+                show_name TEXT NOT NULL,
+                episode_title TEXT NOT NULL,
+                published_at TEXT,
+                duration_sec INTEGER,
+                language TEXT,
+                audio_url TEXT,
+                segments_json TEXT NOT NULL DEFAULT '[]',
+                full_text TEXT NOT NULL DEFAULT '',
+                model_used TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL,
+                error TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_pt_show ON podcast_transcripts(show_name);
             """
         )
         # Additive migration for hint + per-option rationales (NotebookLM-sourced quizzes).
@@ -87,6 +105,10 @@ def init_db() -> None:
         existing_cols_ib = {r["name"] for r in conn.execute("PRAGMA table_info(interview_bank)")}
         if "question_en" not in existing_cols_ib:
             conn.execute("ALTER TABLE interview_bank ADD COLUMN question_en TEXT NOT NULL DEFAULT ''")
+        if "reference_answer_en" not in existing_cols_ib:
+            conn.execute(
+                "ALTER TABLE interview_bank ADD COLUMN reference_answer_en TEXT NOT NULL DEFAULT ''"
+            )
 
 
 @contextmanager
@@ -324,11 +346,14 @@ def replace_interview_bank(items: list[dict[str, Any]]) -> dict[str, int]:
         # Snapshot existing rows keyed by the natural identity triple.
         existing: dict[tuple[str, int, str], dict[str, Any]] = {}
         for r in conn.execute(
-            "SELECT topic, idx, source_path, question, question_en FROM interview_bank"
+            "SELECT topic, idx, source_path, question, question_en, "
+            "reference_answer, reference_answer_en FROM interview_bank"
         ):
             existing[(r["topic"], int(r["idx"]), r["source_path"])] = {
                 "question": r["question"],
                 "question_en": r["question_en"] or "",
+                "reference_answer": r["reference_answer"],
+                "reference_answer_en": r["reference_answer_en"] or "",
             }
 
         incoming_keys: set[tuple[str, int, str]] = set()
@@ -347,15 +372,28 @@ def replace_interview_bank(items: list[dict[str, Any]]) -> dict[str, int]:
             # migration rows (empty question_en) also take this path.
             prev_en_text, _ = _split_question_body(prev["question_en"]) if prev else ("", "")
             en_text, en_att = _split_question_body(en)
+            ans_en = it["reference_answer"]
+            prev_ans_en_text, _ = (
+                _split_question_body(prev["reference_answer_en"]) if prev else ("", "")
+            )
+            ans_en_text, ans_en_att = _split_question_body(ans_en)
             if prev is not None and (prev_en_text == en_text or not prev["question_en"]):
                 fr_text, _ = _split_question_body(prev["question"])
                 new_question = f"{fr_text}\n\n{en_att}" if en_att else fr_text
+                # Same preserve logic for the answer: keep the French body if
+                # the English text didn't change, swap in the fresh attachment.
+                if prev["reference_answer_en"] and prev_ans_en_text == ans_en_text:
+                    fr_ans_text, _ = _split_question_body(prev["reference_answer"])
+                    new_answer = f"{fr_ans_text}\n\n{ans_en_att}" if ans_en_att else fr_ans_text
+                else:
+                    new_answer = ans_en
                 conn.execute(
                     "UPDATE interview_bank "
-                    "SET question = ?, reference_answer = ?, topic_label = ?, question_en = ? "
+                    "SET question = ?, reference_answer = ?, topic_label = ?, "
+                    "question_en = ?, reference_answer_en = ? "
                     "WHERE topic = ? AND idx = ? AND source_path = ?",
-                    (new_question, it["reference_answer"], it.get("topic_label", topic), en,
-                     topic, idx, source_path),
+                    (new_question, new_answer, it.get("topic_label", topic),
+                     en, ans_en, topic, idx, source_path),
                 )
                 preserved += 1
             else:
@@ -366,10 +404,11 @@ def replace_interview_bank(items: list[dict[str, Any]]) -> dict[str, int]:
                 )
                 conn.execute(
                     "INSERT INTO interview_bank "
-                    "(topic, topic_label, source_path, idx, question, question_en, reference_answer, created_at) "
-                    "VALUES (?,?,?,?,?,?,?,?)",
+                    "(topic, topic_label, source_path, idx, question, question_en, "
+                    "reference_answer, reference_answer_en, created_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
                     (topic, it.get("topic_label", topic), source_path, idx,
-                     en, en, it["reference_answer"], now),
+                     en, en, ans_en, ans_en, now),
                 )
                 inserted += 1
 
@@ -440,17 +479,46 @@ def update_bank_questions(updates: list[tuple[int, str]]) -> int:
     return len(updates)
 
 
+def list_untranslated_answers() -> list[dict[str, Any]]:
+    """Return [{id, reference_answer}] for rows whose `reference_answer` still
+    equals the original English (translation pass hasn't touched them yet)."""
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT id, reference_answer FROM interview_bank "
+            "WHERE reference_answer_en != '' AND reference_answer = reference_answer_en "
+            "ORDER BY id ASC"
+        )
+        return [
+            {"id": int(r["id"]), "reference_answer": r["reference_answer"]}
+            for r in cur.fetchall()
+        ]
+
+
+def update_bank_answers(updates: list[tuple[int, str]]) -> int:
+    """Batch-update the `reference_answer` column by row id."""
+    if not updates:
+        return 0
+    with get_conn() as conn:
+        conn.executemany(
+            "UPDATE interview_bank SET reference_answer = ? WHERE id = ?",
+            [(new_a, row_id) for row_id, new_a in updates],
+        )
+    return len(updates)
+
+
 def random_interview_question(topic: str | None = None) -> dict[str, Any] | None:
     with get_conn() as conn:
         if topic:
             cur = conn.execute(
-                "SELECT id, topic, topic_label, source_path, idx, question, reference_answer "
+                "SELECT id, topic, topic_label, source_path, idx, "
+                "question, question_en, reference_answer, reference_answer_en "
                 "FROM interview_bank WHERE topic = ? ORDER BY RANDOM() LIMIT 1",
                 (topic,),
             )
         else:
             cur = conn.execute(
-                "SELECT id, topic, topic_label, source_path, idx, question, reference_answer "
+                "SELECT id, topic, topic_label, source_path, idx, "
+                "question, question_en, reference_answer, reference_answer_en "
                 "FROM interview_bank ORDER BY RANDOM() LIMIT 1"
             )
         row = cur.fetchone()
@@ -518,6 +586,127 @@ def interview_attempt_detail(attempt_id: int) -> dict[str, Any] | None:
             except (TypeError, json.JSONDecodeError):
                 d["evaluation"] = None
         return d
+
+
+# ---------------------------------------------------------------------------
+# Podcast transcripts
+# ---------------------------------------------------------------------------
+
+
+def insert_podcast_pending(spotify_url: str, spotify_episode_id: str) -> int:
+    """Create the row right after the user submits the URL. Returns the new id.
+    Raises sqlite3.IntegrityError if the URL is already in the bank."""
+    now = datetime.utcnow().isoformat()
+    with get_conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO podcast_transcripts "
+            "(spotify_url, spotify_episode_id, show_name, episode_title, "
+            "status, created_at) VALUES (?,?,?,?,?,?)",
+            (spotify_url, spotify_episode_id, "", "", "pending", now),
+        )
+        return int(cur.lastrowid)
+
+
+def update_podcast_status(
+    row_id: int,
+    status: str,
+    error: str | None = None,
+) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE podcast_transcripts SET status = ?, error = ? WHERE id = ?",
+            (status, error, row_id),
+        )
+
+
+def update_podcast_metadata(
+    row_id: int,
+    show_name: str,
+    episode_title: str,
+    published_at: str | None,
+    duration_sec: int | None,
+    audio_url: str | None,
+) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE podcast_transcripts SET show_name = ?, episode_title = ?, "
+            "published_at = ?, duration_sec = ?, audio_url = ? WHERE id = ?",
+            (show_name, episode_title, published_at, duration_sec, audio_url, row_id),
+        )
+
+
+def finalize_podcast_transcript(
+    row_id: int,
+    language: str,
+    segments: list[dict[str, Any]],
+    model_used: str,
+) -> None:
+    full_text = "\n".join(seg.get("text", "") for seg in segments).strip()
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE podcast_transcripts SET segments_json = ?, full_text = ?, "
+            "language = ?, model_used = ?, status = 'done', error = NULL "
+            "WHERE id = ?",
+            (
+                json.dumps(segments, ensure_ascii=False),
+                full_text,
+                language,
+                model_used,
+                row_id,
+            ),
+        )
+
+
+def list_podcast_transcripts() -> list[dict[str, Any]]:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT id, spotify_url, spotify_episode_id, show_name, episode_title, "
+            "published_at, duration_sec, language, model_used, status, error, created_at "
+            "FROM podcast_transcripts ORDER BY id DESC"
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_podcast_transcript(row_id: int) -> dict[str, Any] | None:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT * FROM podcast_transcripts WHERE id = ?", (row_id,)
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        try:
+            d["segments"] = json.loads(d.pop("segments_json") or "[]")
+        except (TypeError, json.JSONDecodeError):
+            d["segments"] = []
+        return d
+
+
+def delete_podcast_transcript(row_id: int) -> int:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM podcast_transcripts WHERE id = ?", (row_id,)
+        )
+        return cur.rowcount
+
+
+def search_podcast_transcripts(query: str) -> list[dict[str, Any]]:
+    q = (query or "").strip()
+    if not q:
+        return []
+    like = f"%{q}%"
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT id, spotify_url, show_name, episode_title, published_at, "
+            "duration_sec, language, status, created_at "
+            "FROM podcast_transcripts "
+            "WHERE status = 'done' AND ("
+            "  full_text LIKE ? OR show_name LIKE ? OR episode_title LIKE ?"
+            ") ORDER BY id DESC",
+            (like, like, like),
+        )
+        return [dict(r) for r in cur.fetchall()]
 
 
 def banks_summary(subject_id: str) -> list[dict[str, Any]]:

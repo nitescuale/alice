@@ -3,6 +3,7 @@ import {
   BookOpen,
   Brain,
   MessageSquare,
+  Podcast,
   Settings,
   BarChart3,
   GitBranch,
@@ -79,6 +80,18 @@ export function Layout() {
               <MessageSquare size={18} />
             </span>
             Interviews
+          </NavLink>
+
+          <NavLink
+            to="/podcasts"
+            className={({ isActive }) =>
+              `alice-sidebar__link ${isActive ? "alice-sidebar__link--active" : ""}`
+            }
+          >
+            <span className="alice-sidebar__link-icon">
+              <Podcast size={18} />
+            </span>
+            Podcasts
           </NavLink>
 
           <span className="alice-sidebar__nav-section">Importer</span>
