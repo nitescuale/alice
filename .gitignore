@@ -26,5 +26,6 @@ dist-ssr
 # ALICE
 .alice_data
 backend/.venv
+backend/venv
 backend/**/__pycache__
 *.pyc
