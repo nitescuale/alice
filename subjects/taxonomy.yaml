@@ -8,9 +8,15 @@ subjects:
   - id: ch01-intro
     title: Introduction
     path: data-science/ch01-intro
+- id: rseaux-neuronaux
+  title: Réseaux Neuronaux
+  chapters:
+  - id: transformers
+    title: Transformers
+    path: rseaux-neuronaux/transformers
 - id: social-network-analysis
   title: Social Network Analysis
   chapters:
-  - id: fondamentaux-des-reseaux-complexes
+  - id: fondamentaux-des-rseaux-complexes
     title: Fondamentaux des Réseaux Complexes
-    path: social-network-analysis/fondamentaux-des-reseaux-complexes
+    path: social-network-analysis/fondamentaux-des-rseaux-complexes
