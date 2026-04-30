@@ -126,7 +126,11 @@ def _load_model() -> Any:
     return _model
 
 
-def _transcribe_sync(audio_path: Path, language: str | None) -> dict[str, Any]:
+def _transcribe_sync(
+    audio_path: Path,
+    language: str | None,
+    progress_cb: Any = None,
+) -> dict[str, Any]:
     model = _load_model()
     cfg = get_config()
     segments_iter, info = model.transcribe(
@@ -135,18 +139,31 @@ def _transcribe_sync(audio_path: Path, language: str | None) -> dict[str, Any]:
         vad_filter=True,
         beam_size=5,
     )
-    segments = [
-        {"start": float(s.start), "end": float(s.end), "text": s.text.strip()}
-        for s in segments_iter
-    ]
+    duration = float(info.duration) if info.duration else 0.0
+    segments: list[dict[str, Any]] = []
+    for s in segments_iter:
+        segments.append(
+            {"start": float(s.start), "end": float(s.end), "text": s.text.strip()}
+        )
+        if progress_cb is not None and duration > 0:
+            try:
+                progress_cb(min(1.0, float(s.end) / duration))
+            except Exception:  # noqa: BLE001
+                pass
     return {
         "language": info.language,
         "segments": segments,
-        "duration": float(info.duration),
+        "duration": duration,
         "model_used": f"{cfg['model']}/{cfg['compute_type']}",
     }
 
 
-async def transcribe(audio_path: Path, language: str | None = None) -> dict[str, Any]:
+async def transcribe(
+    audio_path: Path,
+    language: str | None = None,
+    progress_cb: Any = None,
+) -> dict[str, Any]:
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _transcribe_sync, audio_path, language)
+    return await loop.run_in_executor(
+        None, _transcribe_sync, audio_path, language, progress_cb
+    )

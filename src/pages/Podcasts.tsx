@@ -22,6 +22,7 @@ type PodcastStatus =
   | "resolving"
   | "downloading"
   | "transcribing"
+  | "cleaning"
   | "done"
   | "error";
 
@@ -58,6 +59,8 @@ interface JobStatus {
   stage: string;
   message: string;
   error: string | null;
+  progress: number | null;
+  started_at: number | null;
 }
 
 interface TranscriptionInfo {
@@ -74,6 +77,7 @@ const STAGE_LABEL: Record<string, string> = {
   resolving: "Résolution",
   downloading: "Téléchargement",
   transcribing: "Transcription",
+  cleaning: "Nettoyage",
   done: "Terminé",
   error: "Erreur",
 };
@@ -83,6 +87,7 @@ const STAGE_VARIANT: Record<string, "default" | "info" | "amber" | "success" | "
   resolving: "info",
   downloading: "info",
   transcribing: "amber",
+  cleaning: "amber",
   done: "success",
   error: "danger",
 };
@@ -104,6 +109,15 @@ function formatTimestamp(sec: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+function formatElapsed(secs: number): string {
+  const s = Math.max(0, Math.floor(secs));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = s % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`;
+  return `${m}:${String(r).padStart(2, "0")}`;
+}
+
 export function Podcasts() {
   const [url, setUrl] = useState("");
   const [list, setList] = useState<PodcastListRow[]>([]);
@@ -116,7 +130,9 @@ export function Podcasts() {
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [, setTick] = useState(0);
   const pollRef = useRef<number | null>(null);
+  const tickRef = useRef<number | null>(null);
 
   async function loadList() {
     try {
@@ -144,10 +160,30 @@ export function Podcasts() {
   const inProgress = useMemo(
     () =>
       list.filter((r) =>
-        ["pending", "resolving", "downloading", "transcribing"].includes(r.status),
+        ["pending", "resolving", "downloading", "transcribing", "cleaning"].includes(r.status),
       ),
     [list],
   );
+
+  useEffect(() => {
+    if (inProgress.length === 0) {
+      if (tickRef.current) {
+        window.clearInterval(tickRef.current);
+        tickRef.current = null;
+      }
+      return;
+    }
+    if (tickRef.current) return;
+    tickRef.current = window.setInterval(() => {
+      setTick((t) => (t + 1) % 1_000_000);
+    }, 1000) as unknown as number;
+    return () => {
+      if (tickRef.current) {
+        window.clearInterval(tickRef.current);
+        tickRef.current = null;
+      }
+    };
+  }, [inProgress.length]);
 
   useEffect(() => {
     if (inProgress.length === 0) {
@@ -457,7 +493,7 @@ export function Podcasts() {
         {visibleList.map((row) => {
           const job = jobs[row.id];
           const stage = job?.stage || row.status;
-          const isLoading = ["pending", "resolving", "downloading", "transcribing"].includes(
+          const isLoading = ["pending", "resolving", "downloading", "transcribing", "cleaning"].includes(
             stage,
           );
           return (
@@ -521,16 +557,65 @@ export function Podcasts() {
                 <span>· {formatDuration(row.duration_sec)}</span>
                 {row.language && <span>· {row.language}</span>}
               </div>
-              {job?.message && isLoading && (
-                <p
-                  style={{
-                    marginTop: "var(--sp-2)",
-                    fontSize: "var(--text-xs)",
-                    color: "var(--amber-300)",
-                  }}
-                >
-                  {job.message}
-                </p>
+              {isLoading && (
+                <div style={{ marginTop: "var(--sp-2)" }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "baseline",
+                      gap: "var(--sp-2)",
+                      fontSize: "var(--text-xs)",
+                      color: "var(--amber-300)",
+                    }}
+                  >
+                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {job?.message || STAGE_LABEL[stage] || stage}
+                    </span>
+                    <span style={{ fontVariantNumeric: "tabular-nums", color: "var(--noir-300)" }}>
+                      {job?.started_at
+                        ? formatElapsed(Date.now() / 1000 - job.started_at)
+                        : "0:00"}
+                      {typeof job?.progress === "number"
+                        ? ` · ${Math.round(job.progress * 100)}%`
+                        : ""}
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      marginTop: "var(--sp-1)",
+                      height: 4,
+                      borderRadius: 2,
+                      background: "var(--noir-800, rgba(255,255,255,0.06))",
+                      overflow: "hidden",
+                      position: "relative",
+                    }}
+                  >
+                    {typeof job?.progress === "number" ? (
+                      <div
+                        style={{
+                          width: `${Math.max(0, Math.min(100, job.progress * 100))}%`,
+                          height: "100%",
+                          background: "var(--amber-400)",
+                          transition: "width 0.3s ease",
+                        }}
+                      />
+                    ) : (
+                      <div
+                        className="alice-indeterminate"
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          height: "100%",
+                          width: "30%",
+                          background: "var(--amber-400)",
+                          opacity: 0.7,
+                        }}
+                      />
+                    )}
+                  </div>
+                </div>
               )}
               {row.status === "error" && (
                 <p

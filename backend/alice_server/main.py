@@ -7,6 +7,7 @@ import json
 import re
 import sqlite3
 import tempfile
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +30,7 @@ from alice_server import (
     spotify_client,
     store,
     transcription,
+    transcript_cleanup,
 )
 from alice_server.config import (
     OLLAMA_HOST,
@@ -1296,30 +1298,62 @@ _podcast_jobs: dict[int, dict[str, Any]] = {}
 def _job_state(row_id: int) -> dict[str, Any]:
     return _podcast_jobs.setdefault(
         row_id,
-        {"stage": "pending", "message": "", "error": None},
+        {
+            "stage": "pending",
+            "message": "",
+            "error": None,
+            "progress": None,
+            "started_at": None,
+        },
     )
 
 
-def _set_job(row_id: int, stage: str, message: str = "", error: str | None = None) -> None:
+def _set_job(
+    row_id: int,
+    stage: str,
+    message: str = "",
+    error: str | None = None,
+    progress: float | None = None,
+) -> None:
     j = _job_state(row_id)
     j["stage"] = stage
     j["message"] = message
     j["error"] = error
+    j["progress"] = progress
 
 
-async def _download_audio(url: str, dest: Path) -> None:
+def _set_job_progress(row_id: int, progress: float | None) -> None:
+    j = _podcast_jobs.get(row_id)
+    if j is not None:
+        j["progress"] = progress
+
+
+async def _download_audio(
+    url: str,
+    dest: Path,
+    progress_cb: "Any" = None,
+) -> None:
     async with httpx.AsyncClient(follow_redirects=True, timeout=120.0) as client:
         async with client.stream("GET", url) as r:
             r.raise_for_status()
+            try:
+                total = int(r.headers.get("content-length") or 0)
+            except (TypeError, ValueError):
+                total = 0
+            written = 0
             with dest.open("wb") as f:
                 async for chunk in r.aiter_bytes(chunk_size=1 << 16):
                     if chunk:
                         f.write(chunk)
+                        written += len(chunk)
+                        if progress_cb is not None and total > 0:
+                            progress_cb(min(1.0, written / total))
 
 
 async def _process_podcast(row_id: int, spotify_url: str) -> None:
     audio_path: Path | None = None
     tmpdir: tempfile.TemporaryDirectory | None = None
+    _job_state(row_id)["started_at"] = time.time()
     try:
         _set_job(row_id, "resolving", "Résolution Spotify + Podcast Index…")
         store.update_podcast_status(row_id, "resolving")
@@ -1344,20 +1378,48 @@ async def _process_podcast(row_id: int, spotify_url: str) -> None:
             audio_url=enclosure,
         )
 
-        _set_job(row_id, "downloading", "Téléchargement de l'audio…")
+        _set_job(row_id, "downloading", "Téléchargement de l'audio…", progress=0.0)
         store.update_podcast_status(row_id, "downloading")
         tmpdir = tempfile.TemporaryDirectory(prefix="alice_pod_")
         audio_path = Path(tmpdir.name) / "audio.mp3"
-        await _download_audio(enclosure, audio_path)
 
-        _set_job(row_id, "transcribing", "Transcription faster-whisper…")
+        def _on_dl(p: float) -> None:
+            _set_job_progress(row_id, p)
+
+        await _download_audio(enclosure, audio_path, progress_cb=_on_dl)
+
+        _set_job(row_id, "transcribing", "Transcription faster-whisper…", progress=0.0)
         store.update_podcast_status(row_id, "transcribing")
-        result = await transcription.transcribe(audio_path, language=None)
+
+        def _on_tr(p: float) -> None:
+            _set_job_progress(row_id, p)
+
+        result = await transcription.transcribe(
+            audio_path, language=None, progress_cb=_on_tr
+        )
+
+        _set_job(row_id, "cleaning", "Nettoyage du transcript (dedup + LLM)…", progress=0.0)
+        store.update_podcast_status(row_id, "cleaning")
+
+        def _on_chunk_done(done: int, total: int) -> None:
+            frac = (done / total) if total else None
+            _set_job(
+                row_id,
+                "cleaning",
+                f"Nettoyage LLM : chunk {done}/{total}",
+                progress=frac,
+            )
+
+        cleaned_segments = await transcript_cleanup.clean_transcript(
+            result["segments"],
+            language=result.get("language"),
+            progress_cb=_on_chunk_done,
+        )
 
         store.finalize_podcast_transcript(
             row_id,
             language=result["language"],
-            segments=result["segments"],
+            segments=cleaned_segments,
             model_used=result["model_used"],
         )
         _set_job(row_id, "done", "Transcript prêt.")
@@ -1423,13 +1485,24 @@ def podcasts_status(row_id: int) -> dict[str, Any]:
     d = store.get_podcast_transcript(row_id)
     if not d:
         raise HTTPException(404, "Podcast introuvable.")
-    job = _podcast_jobs.get(row_id, {"stage": d["status"], "message": "", "error": d.get("error")})
+    job = _podcast_jobs.get(
+        row_id,
+        {
+            "stage": d["status"],
+            "message": "",
+            "error": d.get("error"),
+            "progress": None,
+            "started_at": None,
+        },
+    )
     return {
         "id": row_id,
         "status": d["status"],
         "stage": job.get("stage", d["status"]),
         "message": job.get("message", ""),
         "error": job.get("error") or d.get("error"),
+        "progress": job.get("progress"),
+        "started_at": job.get("started_at"),
     }
 
 
