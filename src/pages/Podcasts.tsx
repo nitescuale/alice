@@ -16,6 +16,7 @@ import { Card, CardHeader, CardBody } from "../components/Card";
 import { Button } from "../components/Button";
 import { Input } from "../components/Input";
 import { Badge } from "../components/Badge";
+import { notify } from "../components/Notifications";
 
 type PodcastStatus =
   | "pending"
@@ -134,6 +135,7 @@ export function Podcasts() {
   const pollRef = useRef<number | null>(null);
   const tickRef = useRef<number | null>(null);
   const metaSeenRef = useRef<Set<number>>(new Set());
+  const notifiedRef = useRef<Set<number>>(new Set());
 
   async function loadList() {
     try {
@@ -199,14 +201,17 @@ export function Podcasts() {
       try {
         const updates = await Promise.all(
           inProgress.map((r) =>
-            api<JobStatus>(`/api/podcasts/${r.id}/status`).catch(() => null),
+            api<JobStatus>(`/api/podcasts/${r.id}/status`)
+              .then((j) => ({ row: r, job: j }))
+              .catch(() => null),
           ),
         );
         const map: Record<number, JobStatus> = { ...jobs };
         let anyDone = false;
         let anyMetaReady = false;
-        for (const j of updates) {
-          if (!j) continue;
+        for (const u of updates) {
+          if (!u) continue;
+          const { row: r, job: j } = u;
           map[j.id] = j;
           if (j.status === "done" || j.status === "error") anyDone = true;
           const metaReady =
@@ -214,6 +219,32 @@ export function Podcasts() {
           if (metaReady && !metaSeenRef.current.has(j.id)) {
             metaSeenRef.current.add(j.id);
             anyMetaReady = true;
+          }
+          if (
+            (j.status === "done" || j.status === "error") &&
+            !notifiedRef.current.has(j.id)
+          ) {
+            notifiedRef.current.add(j.id);
+            const elapsed =
+              j.started_at != null
+                ? Date.now() / 1000 - j.started_at
+                : undefined;
+            const title = r.episode_title || r.spotify_episode_id;
+            if (j.status === "done") {
+              notify({
+                title: "Import terminé",
+                message: title,
+                elapsed,
+                variant: "success",
+              });
+            } else {
+              notify({
+                title: "Import échoué",
+                message: j.error || title,
+                elapsed,
+                variant: "error",
+              });
+            }
           }
         }
         setJobs(map);

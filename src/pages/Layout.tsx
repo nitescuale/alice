@@ -9,6 +9,7 @@ import {
   GitBranch,
   Upload,
 } from "lucide-react";
+import { Notifications } from "../components/Notifications";
 
 export function Layout() {
   return (
@@ -146,6 +147,7 @@ export function Layout() {
           <Outlet />
         </div>
       </main>
+      <Notifications />
     </div>
   );
 }

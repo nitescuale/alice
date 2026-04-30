@@ -444,6 +444,95 @@ textarea.alice-textarea {
   padding: var(--sp-6);
 }
 
+/* ── Notifications (toast stack) ───────────────────── */
+.alice-notif-stack {
+  position: fixed;
+  top: var(--sp-5);
+  right: var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  z-index: 9999;
+  pointer-events: none;
+  max-width: 360px;
+}
+
+.alice-notif {
+  pointer-events: auto;
+  display: flex;
+  gap: var(--sp-3);
+  align-items: flex-start;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--noir-800);
+  border: var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  animation: alice-notif-in 0.25s var(--ease-out);
+}
+
+.alice-notif--success {
+  border-left: 3px solid var(--success-500);
+}
+
+.alice-notif--error {
+  border-left: 3px solid var(--danger-500);
+}
+
+.alice-notif__icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--success-500);
+}
+
+.alice-notif--error .alice-notif__icon {
+  color: var(--danger-500);
+}
+
+.alice-notif__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.alice-notif__title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--noir-50);
+}
+
+.alice-notif__sub {
+  font-size: var(--text-xs);
+  color: var(--amber-300);
+  margin-top: 2px;
+}
+
+.alice-notif__msg {
+  font-size: var(--text-xs);
+  color: var(--noir-300);
+  margin-top: 4px;
+  word-break: break-word;
+}
+
+.alice-notif__close {
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  color: var(--noir-400);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.alice-notif__close:hover {
+  background: var(--noir-700);
+  color: var(--noir-100);
+}
+
+@keyframes alice-notif-in {
+  from { opacity: 0; transform: translateX(20px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
 /* ── Progress ring ─────────────────────────────────── */
 .progress-ring {
   position: relative;
