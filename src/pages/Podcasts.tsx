@@ -66,10 +66,11 @@ interface JobStatus {
 
 interface TranscriptionInfo {
   available: boolean;
+  backend?: "cuda" | "vulkan";
   model?: string;
   compute_type?: string;
   device_name?: string;
-  vram_gb?: number;
+  vram_gb?: number | null;
   error?: string;
 }
 
@@ -419,8 +420,14 @@ export function Podcasts() {
             {info.available ? (
               <span style={{ fontSize: "var(--text-sm)", color: "var(--noir-200)" }}>
                 Whisper :{" "}
-                <strong>{info.model}</strong> / {info.compute_type} sur{" "}
-                <strong>{info.device_name}</strong> ({info.vram_gb} Go VRAM)
+                <strong>{info.model}</strong>
+                {info.compute_type ? ` / ${info.compute_type}` : ""} sur{" "}
+                <strong>{info.device_name}</strong>
+                {info.vram_gb != null ? ` (${info.vram_gb} Go VRAM)` : ""}
+                {" — "}
+                <span style={{ color: "var(--amber-300)" }}>
+                  {info.backend === "vulkan" ? "Vulkan / whisper.cpp" : "CUDA / faster-whisper"}
+                </span>
               </span>
             ) : (
               <span style={{ fontSize: "var(--text-sm)", color: "var(--danger-400)" }}>

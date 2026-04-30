@@ -11,3 +11,11 @@ nbformat>=5.10.0
 notebooklm-py>=0.1.0
 faster-whisper>=1.1.0
 feedparser>=6.0
+
+# AMD / Intel / iGPU users: install whisper.cpp Python binding with Vulkan
+# backend so transcription stays on the GPU (no CPU fallback). Requires the
+# Vulkan SDK to be installed first (https://vulkan.lunarg.com/sdk/home).
+#   GGML_VULKAN=1 pip install pywhispercpp --no-binary pywhispercpp
+# Leave commented; ALICE auto-detects CUDA first and only loads pywhispercpp
+# when no NVIDIA GPU is available.
+# pywhispercpp>=1.2.0
