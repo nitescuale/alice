@@ -36,6 +36,51 @@ REPO_OWNER = "youssefHosni"
 REPO_NAME = "Data-Science-Interview-Questions-Answers"
 REPO_REF = "main"
 
+# Second source: Devinterview-io — one topic per repo, Q&A in the repo README.
+# Validated DS/ML subset (see docs/devinterview-repos-proposal.md). Each entry is
+# the repo name; the README format differs from youssefHosni (see
+# `parse_devinterview_readme`).
+DEVINTERVIEW_OWNER = "Devinterview-io"
+DEVINTERVIEW_REF = "main"
+DEVINTERVIEW_REPOS = (
+    # Tier 1 — core DS/ML
+    "llms-interview-questions",
+    "data-scientist-interview-questions",
+    "computer-vision-interview-questions",
+    "data-engineer-interview-questions",
+    "deep-learning-interview-questions",
+    "data-analyst-interview-questions",
+    "apache-spark-interview-questions",
+    "data-processing-interview-questions",
+    "feature-engineering-interview-questions",
+    "llmops-interview-questions",
+    "explainable-ai-interview-questions",
+    # Tier 2 — ML algorithms & stats
+    "linear-regression-interview-questions",
+    "cnn-interview-questions",
+    "logistic-regression-interview-questions",
+    "k-means-clustering-interview-questions",
+    "linear-algebra-interview-questions",
+    "gradient-descent-interview-questions",
+    "decision-tree-interview-questions",
+    "bias-and-variance-interview-questions",
+    "cluster-analysis-interview-questions",
+    "k-nearest-neighbors-interview-questions",
+    "dimensionality-reduction-interview-questions",
+    "cost-function-interview-questions",
+    "classification-algorithms-interview-questions",
+    "ensemble-learning-interview-questions",
+    "light-gbm-interview-questions",
+    "anomaly-detection-interview-questions",
+    "gans-interview-questions",
+    "data-mining-interview-questions",
+    "keras-interview-questions",
+    "curse-of-dimensionality-interview-questions",
+    "autoencoders-interview-questions",
+    "chatgpt-interview-questions",
+    "genetic-algorithms-interview-questions",
+)
+
 _TREE_API = (
     f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/git/trees/{REPO_REF}?recursive=1"
 )
@@ -304,6 +349,166 @@ async def translate_questions(
     return out
 
 
+# --- Devinterview-io source -------------------------------------------------
+#
+# README layout (very regular across repos):
+#
+#     # 80 Essential Deep Learning Interview Questions in 2026
+#     ...promo div / image / "find all N answers here 👉 [...]"...
+#     <br>
+#     ## 1. Define _deep learning_ and how it differs ...
+#     <answer body: prose, ### subheadings, lists, $math$, images>
+#     <br>
+#     ## 2. What is an _artificial neural network_?
+#     ...
+#
+# Questions are `## N.` headings (exactly two `#`); the answer is everything
+# until the next `## N.` heading. There is no explicit `Answer:` marker.
+
+# `## 12. Some question?` — exactly two hashes, then `N.`
+_DEV_Q_RE = re.compile(r"^##\s+(\d+)\.\s+(.+?)\s*$")
+# Pull the human topic name out of the H1, e.g.
+# "# 80 Essential Deep Learning Interview Questions in 2026" -> "Deep Learning".
+_DEV_TITLE_RE = re.compile(
+    r"^#\s+.*?\b(?:Essential|Must[-\s]?Know|Top|Fundamental|Important|Common|Basic|Advanced)\b\s+(.+?)\s+Interview\s+Questions",
+    re.IGNORECASE,
+)
+# Trailing noise to strip from an answer body.
+_DEV_TRAILING_RE = re.compile(r"^\s*(?:<br\s*/?>|---+|\*\*\*+|<p[ >].*|</p>)\s*$", re.IGNORECASE)
+# Acronyms that title-casing would mangle when we fall back to slug -> label.
+_DEV_ACRONYMS = {
+    "llms": "LLMs",
+    "llmops": "LLMOps",
+    "cnn": "CNN",
+    "gans": "GANs",
+    "ai": "AI",
+    "knn": "KNN",
+    "lightgbm": "LightGBM",
+    "chatgpt": "ChatGPT",
+}
+
+
+def _dev_slug(repo: str) -> str:
+    """`deep-learning-interview-questions` -> `deep-learning`."""
+    return re.sub(r"-interview-questions$", "", repo).strip("-").lower() or repo
+
+
+def _dev_label(repo: str, readme: str) -> str:
+    """Prefer the topic name from the H1; fall back to a title-cased slug."""
+    for line in readme.splitlines():
+        if line.startswith("# "):
+            m = _DEV_TITLE_RE.match(line)
+            if m:
+                # Titles like "Top 100 Data Engineer Interview Questions" leak the
+                # count into the capture; drop a leading number.
+                return re.sub(r"^\d+\s+", "", m.group(1).strip())
+            break
+    slug = _dev_slug(repo)
+    words = [
+        _DEV_ACRONYMS.get(w.lower(), w.capitalize()) for w in slug.split("-") if w
+    ]
+    return " ".join(words) or repo
+
+
+def parse_devinterview_readme(text: str) -> list[dict[str, Any]]:
+    """Extract Q/A pairs from a Devinterview-io repo README.
+
+    Returns a list of {idx, question, reference_answer} with idx = the `## N.`
+    number. Images are rewritten to raw URLs; trailing `<br>`/rules are dropped.
+    """
+    lines = text.splitlines()
+    items: list[dict[str, Any]] = []
+    cur_idx: int | None = None
+    cur_q: str | None = None
+    cur_body: list[str] = []
+
+    def flush() -> None:
+        nonlocal cur_idx, cur_q, cur_body
+        if cur_q is None or cur_idx is None:
+            return
+        body = list(cur_body)
+        # Drop trailing blank lines / <br> / horizontal rules / promo blocks.
+        while body and (not body[-1].strip() or _DEV_TRAILING_RE.match(body[-1])):
+            body.pop()
+        answer = _rewrite_image_urls("\n".join(body).strip())
+        if len(answer) >= 40:
+            items.append(
+                {
+                    "idx": cur_idx,
+                    "question": _rewrite_image_urls(cur_q),
+                    "reference_answer": answer,
+                }
+            )
+        cur_idx = None
+        cur_q = None
+        cur_body = []
+
+    for line in lines:
+        m = _DEV_Q_RE.match(line)
+        if m:
+            flush()
+            cur_idx = int(m.group(1))
+            cur_q = m.group(2).strip()
+            cur_body = []
+            continue
+        if cur_q is not None:
+            cur_body.append(line)
+    flush()
+    return items
+
+
+async def fetch_devinterview_all(token: str | None = None) -> dict[str, Any]:
+    """Fetch + parse every validated Devinterview-io repo README.
+
+    Same return shape as `fetch_and_parse_all`. Per-repo failures are skipped.
+    """
+    topics: list[dict[str, Any]] = []
+    all_items: list[dict[str, Any]] = []
+    sem = asyncio.Semaphore(5)
+    headers = {"Accept": "text/plain"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    async def fetch_one(client: httpx.AsyncClient, repo: str) -> None:
+        url = (
+            f"https://raw.githubusercontent.com/{DEVINTERVIEW_OWNER}/{repo}/"
+            f"{DEVINTERVIEW_REF}/README.md"
+        )
+        async with sem:
+            try:
+                r = await client.get(url)
+                r.raise_for_status()
+            except httpx.HTTPError:
+                return
+        slug = _dev_slug(repo)
+        label = _dev_label(repo, r.text)
+        source_path = f"devinterview:{repo}"
+        parsed = parse_devinterview_readme(r.text)
+        for p in parsed:
+            all_items.append(
+                {
+                    "topic": slug,
+                    "topic_label": label,
+                    "source_path": source_path,
+                    "idx": p["idx"],
+                    "question": p["question"],
+                    "reference_answer": p["reference_answer"],
+                }
+            )
+        topics.append(
+            {
+                "slug": slug,
+                "label": label,
+                "source_path": source_path,
+                "count": len(parsed),
+            }
+        )
+
+    async with httpx.AsyncClient(headers=headers, timeout=60.0) as client:
+        await asyncio.gather(*(fetch_one(client, repo) for repo in DEVINTERVIEW_REPOS))
+    return {"topics": topics, "items": all_items}
+
+
 async def fetch_and_parse_all(token: str | None = None, translate: bool = False) -> dict[str, Any]:
     """Fetch every topic file, parse it, return a flat list of bank items.
 
@@ -314,9 +519,10 @@ async def fetch_and_parse_all(token: str | None = None, translate: bool = False)
                       "idx": int, "question": str, "reference_answer": str}, ...],
         }
     """
-    paths = await fetch_topic_files(token=token)
-    if not paths:
-        return {"topics": [], "items": []}
+    try:
+        paths = await fetch_topic_files(token=token)
+    except httpx.HTTPError:
+        paths = []
 
     topics: list[dict[str, Any]] = []
     all_items: list[dict[str, Any]] = []
@@ -353,6 +559,12 @@ async def fetch_and_parse_all(token: str | None = None, translate: bool = False)
                     "count": len(parsed),
                 }
             )
+
+    # Merge the Devinterview-io source. Distinct source_path keeps its rows from
+    # colliding with youssefHosni rows even when topic slugs coincide.
+    dev = await fetch_devinterview_all(token=token)
+    all_items.extend(dev["items"])
+    topics.extend(dev["topics"])
 
     if translate and all_items:
         try:
