@@ -288,8 +288,8 @@
 }
 
 .assistant-msg__avatar--ai {
-  background: linear-gradient(135deg, var(--amber-500), #c48a30);
-  color: var(--noir-950);
+  background: var(--amber-400);
+  color: #fff;
 }
 
 .assistant-msg__avatar--user {
@@ -306,8 +306,8 @@
 }
 
 .assistant-msg--user .assistant-msg__bubble {
-  background: var(--amber-glow-strong);
-  border: 1px solid rgba(212,160,74,0.15);
+  background: var(--amber-100);
+  border: 1px solid rgba(77,123,224,0.18);
   color: var(--noir-100);
 }
 
@@ -336,8 +336,8 @@
   gap: var(--sp-3);
   padding: var(--sp-4) var(--sp-5);
   margin-bottom: var(--sp-6);
-  background: var(--amber-glow);
-  border: 1px solid rgba(212, 160, 74, 0.2);
+  background: var(--amber-100);
+  border: 1px solid rgba(77, 123, 224, 0.22);
   border-radius: var(--radius-md);
 }
 

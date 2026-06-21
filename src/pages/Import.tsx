@@ -419,7 +419,7 @@ export function Import() {
               padding: "var(--sp-3)",
               border: "1px solid var(--amber-400)",
               borderRadius: "var(--radius-md)",
-              background: "rgba(212, 160, 74, 0.06)",
+              background: "rgba(77, 123, 224, 0.08)",
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)" }}>
@@ -561,7 +561,7 @@ export function Import() {
                   textAlign: "center",
                   cursor: taskRunning ? "not-allowed" : "pointer",
                   transition: "border-color 0.2s, background 0.2s",
-                  background: autoDragOver ? "rgba(212, 160, 74, 0.06)" : "transparent",
+                  background: autoDragOver ? "rgba(77, 123, 224, 0.08)" : "transparent",
                   opacity: taskRunning ? 0.6 : 1,
                 }}
                 onClick={() => {
@@ -787,7 +787,7 @@ export function Import() {
                     textAlign: "center",
                     cursor: "pointer",
                     transition: "border-color 0.2s, background 0.2s",
-                    background: dragOver ? "rgba(212, 160, 74, 0.06)" : "transparent",
+                    background: dragOver ? "rgba(77, 123, 224, 0.08)" : "transparent",
                   }}
                   onClick={() => document.getElementById("file-input")?.click()}
                   role="button"

@@ -226,9 +226,9 @@ export function GitHubImport() {
             style={{
               marginTop: "var(--sp-4)",
               padding: "var(--sp-3)",
-              background: "rgba(212, 160, 74, 0.08)",
+              background: "rgba(77, 123, 224, 0.10)",
               borderRadius: "var(--radius-sm)",
-              border: "1px solid rgba(212, 160, 74, 0.2)",
+              border: "1px solid rgba(77, 123, 224, 0.22)",
             }}
           >
             <p
