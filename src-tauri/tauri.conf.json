@@ -18,7 +18,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:8765 http://localhost:8765 ipc: http://ipc.localhost https://ipc.localhost tauri: asset: http://asset.localhost https://asset.localhost"
+      "csp": "default-src 'self'; img-src 'self' data: https://github.com https://*.githubusercontent.com https://firebasestorage.googleapis.com; connect-src 'self' http://127.0.0.1:8765 http://localhost:8765 ipc: http://ipc.localhost https://ipc.localhost tauri: asset: http://asset.localhost https://asset.localhost"
     }
   },
   "bundle": {
