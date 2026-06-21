@@ -106,3 +106,52 @@
   --z-modal: 100;
   --z-tooltip: 120;
 }
+
+/* ============================================================
+   Dark theme — same Soft Minimal charter (flat, hairlines, one
+   soft-blue accent), dark surfaces. Only the palette is
+   re-pointed; every name keeps its role, so the whole app
+   switches with [data-theme="dark"] on <html>.
+   ============================================================ */
+:root[data-theme="dark"] {
+  /* Neutral ramp: 900s = dark surfaces, 100s/50 = light text */
+  --noir-950: #0c0d10;
+  --noir-900: #121317;  /* app background */
+  --noir-850: #171922;  /* raised surface */
+  --noir-800: #1c1e27;  /* tinted surface */
+  --noir-700: #232631;  /* hairline / code background */
+  --noir-600: #2c2f3a;  /* subtle border */
+  --noir-500: #3a3e4b;  /* medium border / scrollbar */
+  --noir-400: #565b6a;  /* faint text / scrollbar hover */
+  --noir-300: #8b90a0;  /* muted text */
+  --noir-200: #b4b8c4;  /* secondary text */
+  --noir-100: #d9dbe3;  /* primary body text */
+  --noir-50:  #f4f5f8;  /* ink — strongest text */
+
+  /* Accent — soft blue, a touch brighter for dark surfaces */
+  --amber-500: #6f93e8;  /* accent-ink on dark */
+  --amber-400: #5f86e6;  /* accent */
+  --amber-300: #8aa8ef;
+  --amber-200: #2c3c66;  /* accent border tint */
+  --amber-100: #1b2540;  /* accent-soft fill */
+  --amber-glow: rgba(95, 134, 230, 0.18);
+  --amber-glow-strong: rgba(95, 134, 230, 0.28);
+
+  --success-500: #38c08a;
+  --success-400: #5fd0a4;
+  --success-bg: rgba(56, 192, 138, 0.14);
+
+  --danger-500: #f0726a;
+  --danger-400: #f59a94;
+  --danger-bg: rgba(240, 114, 106, 0.14);
+
+  --info-500: #6f93e8;
+  --info-400: #8aa8ef;
+  --info-bg: rgba(111, 147, 232, 0.14);
+
+  /* Shadows read stronger on dark */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.40);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 18px 50px -16px rgba(0, 0, 0, 0.60);
+  --shadow-inner: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+}

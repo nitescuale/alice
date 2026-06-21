@@ -692,6 +692,52 @@
   padding-top: var(--sp-2);
 }
 
+/* Cards with padding="none" (Settings + Podcasts sections) pad their bodies
+   themselves but leave the header flush — inset the header content so the
+   icon/badge aren't glued to the corners (the divider stays full-bleed).
+   Excludes cards that carry their own padding (pad-sm/md/lg, e.g. the
+   Interviews question card) so they don't get double-padded headers. */
+.alice-card:not(.alice-card--pad-sm):not(.alice-card--pad-md):not(.alice-card--pad-lg)
+  .alice-card__header {
+  padding: var(--sp-5) var(--sp-5) var(--sp-3);
+}
+
+/* ── Theme toggle (segmented control) ──────────────── */
+.theme-toggle {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  background: var(--noir-800);
+  border: var(--border-subtle);
+  border-radius: var(--radius-full);
+}
+
+.theme-toggle__opt {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--noir-300);
+  background: transparent;
+  border: none;
+  padding: var(--sp-2) var(--sp-4);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out);
+}
+
+.theme-toggle__opt:hover {
+  color: var(--noir-100);
+}
+
+.theme-toggle__opt--active {
+  background: var(--amber-100);
+  color: var(--amber-500);
+}
+
 /* ── Dashboard page ────────────────────────────────── */
 .dashboard-grid {
   display: grid;
