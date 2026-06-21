@@ -29,3 +29,12 @@ backend/.venv
 backend/venv
 backend/**/__pycache__
 *.pyc
+
+# design-sync (staged scripts, build output, machine state — durable inputs under
+# .design-sync/ that aren't listed here ARE committed: config.json, NOTES.md,
+# conventions.md, previews/, overrides/)
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules

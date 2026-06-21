@@ -1,0 +1,26 @@
+{
+  "projectId": "f3594793-428a-4cbc-ae81-dd4bab29c14c",
+  "shape": "package",
+  "pkg": "alice",
+  "globalName": "AliceDS",
+  "srcDir": "src",
+  "tsconfig": "tsconfig.json",
+  "entry": ".design-sync/ds-entry.tsx",
+  "componentSrcMap": {
+    "Badge": "src/components/Badge.tsx",
+    "Button": "src/components/Button.tsx",
+    "Card": "src/components/Card.tsx",
+    "Input": "src/components/Input.tsx",
+    "Modal": "src/components/Modal.tsx",
+    "Notifications": "src/components/Notifications.tsx",
+    "ProgressRing": "src/components/ProgressRing.tsx",
+    "Select": "src/components/Select.tsx",
+    "Tabs": "src/components/Tabs.tsx"
+  },
+  "guidelinesGlob": [],
+  "readmeHeader": ".design-sync/conventions.md",
+  "overrides": {
+    "Modal": { "cardMode": "single", "viewport": "600x440" },
+    "Notifications": { "cardMode": "single", "viewport": "440x300" }
+  }
+}
