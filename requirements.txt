@@ -11,6 +11,7 @@ nbformat>=5.10.0
 notebooklm-py>=0.1.0
 faster-whisper>=1.1.0
 feedparser>=6.0
+yt-dlp>=2024.10.0
 
 # AMD / Intel / iGPU users: install whisper.cpp Python binding with Vulkan
 # backend so transcription stays on the GPU (no CPU fallback). Requires the

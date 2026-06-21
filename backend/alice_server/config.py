@@ -109,3 +109,77 @@ def set_podcast_runtime(
     if sp_secret is not None:
         _runtime_sp_secret = sp_secret.strip() or None
     _persist_podcast_creds()
+
+
+# Transcription provider: "local" (faster-whisper / whisper.cpp on GPU) or "groq".
+# Persisted alongside podcast creds for symmetry; loaded at import time.
+TRANSCRIPTION_CREDS_PATH = Path(
+    os.environ.get(
+        "ALICE_TRANSCRIPTION_CREDS_PATH",
+        str(PROJECT_ROOT / ".alice_data" / "transcription_creds.json"),
+    )
+)
+
+
+def _load_persisted_transcription() -> dict[str, str]:
+    try:
+        if TRANSCRIPTION_CREDS_PATH.is_file():
+            return json.loads(TRANSCRIPTION_CREDS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+_persisted_t = _load_persisted_transcription()
+_runtime_provider: str = (_persisted_t.get("provider") or "local").strip() or "local"
+_runtime_groq_key: str | None = _persisted_t.get("groq_api_key") or None
+_runtime_deepgram_key: str | None = _persisted_t.get("deepgram_api_key") or None
+
+GROQ_API_KEY_ENV = os.environ.get("GROQ_API_KEY", "")
+DEEPGRAM_API_KEY_ENV = os.environ.get("DEEPGRAM_API_KEY", "")
+ALICE_TRANSCRIPTION_PROVIDER_ENV = os.environ.get("ALICE_TRANSCRIPTION_PROVIDER", "")
+
+VALID_PROVIDERS = {"local", "groq", "deepgram"}
+
+
+def get_transcription_provider() -> str:
+    return (ALICE_TRANSCRIPTION_PROVIDER_ENV or _runtime_provider or "local").strip() or "local"
+
+
+def get_groq_api_key() -> str:
+    return GROQ_API_KEY_ENV or _runtime_groq_key or ""
+
+
+def get_deepgram_api_key() -> str:
+    return DEEPGRAM_API_KEY_ENV or _runtime_deepgram_key or ""
+
+
+def _persist_transcription() -> None:
+    TRANSCRIPTION_CREDS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "provider": _runtime_provider or "local",
+        "groq_api_key": _runtime_groq_key or "",
+        "deepgram_api_key": _runtime_deepgram_key or "",
+    }
+    TRANSCRIPTION_CREDS_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    try:
+        os.chmod(TRANSCRIPTION_CREDS_PATH, 0o600)
+    except Exception:
+        pass
+
+
+def set_transcription_runtime(
+    provider: str | None = None,
+    groq_api_key: str | None = None,
+    deepgram_api_key: str | None = None,
+) -> None:
+    global _runtime_provider, _runtime_groq_key, _runtime_deepgram_key
+    if provider is not None:
+        normalized = provider.strip().lower()
+        if normalized in VALID_PROVIDERS:
+            _runtime_provider = normalized
+    if groq_api_key is not None:
+        _runtime_groq_key = groq_api_key.strip() or None
+    if deepgram_api_key is not None:
+        _runtime_deepgram_key = deepgram_api_key.strip() or None
+    _persist_transcription()

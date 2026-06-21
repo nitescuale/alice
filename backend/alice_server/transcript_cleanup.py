@@ -18,7 +18,8 @@ import re
 import time
 from typing import Any, Awaitable, Callable
 
-from alice_server import ollama
+from alice_server import groq_chat, ollama
+from alice_server.config import get_groq_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -124,9 +125,13 @@ async def _polish_chunk(
     language: str | None,
 ) -> list[str]:
     prompt = _build_prompt(chunk, chunk_start_idx, prev_tail, language)
+    # Cleanup goes to Groq when a Groq key is configured (much faster than
+    # local Ollama), regardless of which provider transcribed the audio.
+    backend = "groq" if get_groq_api_key() else "ollama"
+    gen = groq_chat.generate if backend == "groq" else ollama.generate
     try:
         raw = await asyncio.wait_for(
-            ollama.generate(
+            gen(
                 prompt,
                 system=_SYSTEM_PROMPT,
                 temperature=0.2,
@@ -137,13 +142,14 @@ async def _polish_chunk(
         )
     except asyncio.TimeoutError:
         logger.warning(
-            "polish chunk %d timed out after %.0fs, falling back",
+            "polish chunk %d timed out after %.0fs (%s), falling back",
             chunk_start_idx,
             CHUNK_TIMEOUT_SEC,
+            backend,
         )
         return [seg.get("text", "") for seg in chunk]
     except Exception as exc:  # noqa: BLE001
-        logger.warning("polish chunk %d failed (ollama error): %s", chunk_start_idx, exc)
+        logger.warning("polish chunk %d failed (%s error): %s", chunk_start_idx, backend, exc)
         return [seg.get("text", "") for seg in chunk]
 
     expected = list(range(chunk_start_idx, chunk_start_idx + len(chunk)))

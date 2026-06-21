@@ -22,10 +22,27 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from alice_server.config import (
+    get_deepgram_api_key,
+    get_groq_api_key,
+    get_transcription_provider,
+)
+
 logger = logging.getLogger(__name__)
 
 _model: Any = None
 _config: dict[str, Any] | None = None
+
+
+def reset_config_cache() -> None:
+    """Forget the cached backend config + loaded model.
+
+    Called when the user changes provider in Settings so the next call to
+    ``get_config()`` re-evaluates (e.g. switches CUDA→Groq without restart).
+    """
+    global _config, _model
+    _config = None
+    _model = None
 
 
 # ─── NVIDIA / CUDA detection ────────────────────────────────────────────────
@@ -145,8 +162,42 @@ def _select_vulkan_config() -> dict[str, Any]:
 # ─── Top-level selection ────────────────────────────────────────────────────
 
 
+def _select_groq_config() -> dict[str, Any]:
+    return {
+        "backend": "groq",
+        "model": "whisper-large-v3-turbo",
+        "compute_type": "cloud",
+        "device": "cloud",
+        "device_name": "Groq Cloud",
+        "vram_gb": None,
+        "compute_capability": None,
+    }
+
+
+def _select_deepgram_config() -> dict[str, Any]:
+    return {
+        "backend": "deepgram",
+        "model": "nova-2",
+        "compute_type": "cloud",
+        "device": "cloud",
+        "device_name": "Deepgram",
+        "vram_gb": None,
+        "compute_capability": None,
+    }
+
+
 def _select_config() -> dict[str, Any]:
-    """Pick a backend at startup. CUDA wins if available, Vulkan otherwise."""
+    """Pick a backend. User-selected provider first, then CUDA, then Vulkan."""
+    provider = get_transcription_provider()
+    if provider == "groq":
+        cfg = _select_groq_config()
+        logger.info("Backend: Groq Cloud / %s", cfg["model"])
+        return cfg
+    if provider == "deepgram":
+        cfg = _select_deepgram_config()
+        logger.info("Backend: Deepgram / %s", cfg["model"])
+        return cfg
+
     cuda_err: Exception | None = None
     if shutil.which("nvidia-smi") is not None:
         try:
@@ -330,6 +381,20 @@ async def transcribe(
     language: str | None = None,
     progress_cb: Any = None,
 ) -> dict[str, Any]:
+    cfg = get_config()
+    if cfg["backend"] == "groq":
+        # Groq is HTTP-based and already async — no executor offload needed.
+        from alice_server import transcription_groq
+
+        return await transcription_groq.transcribe(
+            audio_path, language=language, progress_cb=progress_cb
+        )
+    if cfg["backend"] == "deepgram":
+        from alice_server import transcription_deepgram
+
+        return await transcription_deepgram.transcribe(
+            audio_path, language=language, progress_cb=progress_cb
+        )
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None, _transcribe_sync, audio_path, language, progress_cb

@@ -10,6 +10,10 @@ import {
   FolderOpen,
   Podcast,
   KeyRound,
+  Cloud,
+  Palette,
+  Sun,
+  Moon,
 } from "lucide-react";
 import { api } from "../api";
 import { Card, CardHeader, CardBody } from "../components/Card";
@@ -24,6 +28,22 @@ export function Settings() {
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
 
+  const [theme, setTheme] = useState<"light" | "dark">(() =>
+    document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light",
+  );
+
+  function applyTheme(next: "light" | "dark") {
+    setTheme(next);
+    const root = document.documentElement;
+    if (next === "dark") root.setAttribute("data-theme", "dark");
+    else root.removeAttribute("data-theme");
+    try {
+      localStorage.setItem("alice-theme", next);
+    } catch {
+      /* ignore */
+    }
+  }
+
   const [piKey, setPiKey] = useState("");
   const [piSecret, setPiSecret] = useState("");
   const [spId, setSpId] = useState("");
@@ -32,6 +52,11 @@ export function Settings() {
     podcast_index: false,
     spotify: false,
   });
+
+  const [groqKey, setGroqKey] = useState("");
+  const [groqKeyConfigured, setGroqKeyConfigured] = useState(false);
+  const [deepgramKey, setDeepgramKey] = useState("");
+  const [deepgramKeyConfigured, setDeepgramKeyConfigured] = useState(false);
 
   useEffect(() => {
     api<{ ollama_host: string; ollama_model: string }>("/api/settings")
@@ -49,6 +74,16 @@ export function Settings() {
           spotify: s.spotify_configured,
         }),
       )
+      .catch(() => {});
+    api<{
+      provider: "local" | "groq" | "deepgram";
+      groq_key_configured: boolean;
+      deepgram_key_configured: boolean;
+    }>("/api/settings/transcription")
+      .then((s) => {
+        setGroqKeyConfigured(s.groq_key_configured);
+        setDeepgramKeyConfigured(s.deepgram_key_configured);
+      })
       .catch(() => {});
   }, []);
 
@@ -96,6 +131,31 @@ export function Settings() {
     }
   }
 
+  async function saveTranscription() {
+    setErr("");
+    setMsg("");
+    try {
+      const r = await api<{
+        provider: "local" | "groq" | "deepgram";
+        groq_key_configured: boolean;
+        deepgram_key_configured: boolean;
+      }>("/api/settings/transcription", {
+        method: "POST",
+        body: JSON.stringify({
+          groq_api_key: groqKey || null,
+          deepgram_api_key: deepgramKey || null,
+        }),
+      });
+      setGroqKeyConfigured(r.groq_key_configured);
+      setDeepgramKeyConfigured(r.deepgram_key_configured);
+      setGroqKey("");
+      setDeepgramKey("");
+      setMsg("Clés cloud enregistrées.");
+    } catch (e) {
+      setErr(String(e));
+    }
+  }
+
   async function refreshModels() {
     setErr("");
     try {
@@ -135,7 +195,7 @@ export function Settings() {
             alignItems: "center",
             gap: "var(--sp-3)",
             background: "var(--success-bg)",
-            border: "1px solid rgba(74, 222, 128, 0.2)",
+            border: "1px solid rgba(31, 157, 107, 0.22)",
             borderRadius: "var(--radius-md)",
             padding: "var(--sp-3) var(--sp-4)",
             marginBottom: "var(--sp-5)",
@@ -150,6 +210,69 @@ export function Settings() {
       )}
 
       <div className="settings-grid">
+        {/* Appearance / theme */}
+        <Card variant="default" padding="none">
+          <CardHeader>
+            <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)" }}>
+              <Palette size={18} style={{ color: "var(--amber-400)" }} />
+              <span style={{ fontWeight: 600, fontSize: "var(--text-md)" }}>
+                Apparence
+              </span>
+            </div>
+          </CardHeader>
+          <CardBody>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "var(--sp-4)",
+                flexWrap: "wrap",
+                padding: "0 var(--sp-5) var(--sp-5)",
+              }}
+            >
+              <div>
+                <div
+                  style={{
+                    fontSize: "var(--text-sm)",
+                    fontWeight: 500,
+                    color: "var(--noir-100)",
+                  }}
+                >
+                  Thème
+                </div>
+                <div
+                  style={{
+                    fontSize: "var(--text-xs)",
+                    color: "var(--noir-300)",
+                    marginTop: 2,
+                  }}
+                >
+                  Clair ou sombre — même charte graphique.
+                </div>
+              </div>
+              <div className="theme-toggle" role="group" aria-label="Thème">
+                <button
+                  type="button"
+                  className={`theme-toggle__opt ${theme === "light" ? "theme-toggle__opt--active" : ""}`}
+                  onClick={() => applyTheme("light")}
+                  aria-pressed={theme === "light"}
+                >
+                  <Sun size={14} /> Clair
+                </button>
+                <button
+                  type="button"
+                  className={`theme-toggle__opt ${theme === "dark" ? "theme-toggle__opt--active" : ""}`}
+                  onClick={() => applyTheme("dark")}
+                  aria-pressed={theme === "dark"}
+                >
+                  <Moon size={14} /> Sombre
+                </button>
+              </div>
+            </div>
+          </CardBody>
+        </Card>
+
         {/* Ollama configuration */}
         <Card variant="default" padding="none">
           <CardHeader>
@@ -319,6 +442,79 @@ export function Settings() {
                   onClick={savePodcastCreds}
                 >
                   Enregistrer Podcasts
+                </Button>
+              </div>
+            </div>
+          </CardBody>
+        </Card>
+
+        {/* Groq API key */}
+        <Card variant="default" padding="none">
+          <CardHeader>
+            <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)" }}>
+              <Cloud size={18} style={{ color: "var(--amber-400)" }} />
+              <span style={{ fontWeight: 600, fontSize: "var(--text-md)" }}>
+                Transcription cloud
+              </span>
+            </div>
+            <div style={{ display: "flex", gap: "var(--sp-2)" }}>
+              <Badge variant={groqKeyConfigured ? "success" : "default"} size="sm">
+                Groq {groqKeyConfigured ? "OK" : "—"}
+              </Badge>
+              <Badge variant={deepgramKeyConfigured ? "success" : "default"} size="sm">
+                Deepgram {deepgramKeyConfigured ? "OK" : "—"}
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardBody>
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "var(--sp-4)",
+                padding: "0 var(--sp-5) var(--sp-5)",
+              }}
+            >
+              <p style={{ fontSize: "var(--text-sm)", color: "var(--noir-300)" }}>
+                Deux moteurs cloud disponibles. Le choix Local / Groq / Deepgram se
+                fait sur la page Podcasts ; ici tu déposes les clés.
+              </p>
+              <ul style={{ margin: 0, paddingLeft: "var(--sp-5)", fontSize: "var(--text-sm)", color: "var(--noir-300)" }}>
+                <li>
+                  <strong>Groq</strong> — <code>whisper-large-v3-turbo</code> ~$0.04/h, free tier limité à 2h/h.
+                  Génère une clé sur <code>console.groq.com</code>.
+                </li>
+                <li>
+                  <strong>Deepgram</strong> — <code>nova-2</code> ~$0.26/h, $200 de crédit gratuit, pas de cap horaire.
+                  Génère une clé sur <code>console.deepgram.com</code>.
+                </li>
+              </ul>
+
+              <Input
+                label="Groq API Key"
+                icon={<KeyRound size={14} />}
+                type="password"
+                value={groqKey}
+                onChange={(e) => setGroqKey(e.target.value)}
+                placeholder={groqKeyConfigured ? "•••••• (configurée)" : "gsk_…"}
+              />
+
+              <Input
+                label="Deepgram API Key"
+                icon={<KeyRound size={14} />}
+                type="password"
+                value={deepgramKey}
+                onChange={(e) => setDeepgramKey(e.target.value)}
+                placeholder={deepgramKeyConfigured ? "•••••• (configurée)" : "…"}
+              />
+
+              <div className="settings-actions">
+                <Button
+                  variant="primary"
+                  icon={<Save size={14} />}
+                  onClick={saveTranscription}
+                >
+                  Enregistrer les clés
                 </Button>
               </div>
             </div>

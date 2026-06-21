@@ -109,6 +109,19 @@ def init_db() -> None:
             conn.execute(
                 "ALTER TABLE interview_bank ADD COLUMN reference_answer_en TEXT NOT NULL DEFAULT ''"
             )
+        # Additive migration: where the row came from (spotify | youtube).
+        # spotify_url / spotify_episode_id are kept as the canonical (URL, id)
+        # pair regardless of source for back-compat with existing rows.
+        existing_cols_pt = {r["name"] for r in conn.execute("PRAGMA table_info(podcast_transcripts)")}
+        if "source" not in existing_cols_pt:
+            conn.execute(
+                "ALTER TABLE podcast_transcripts ADD COLUMN source TEXT NOT NULL DEFAULT 'spotify'"
+            )
+        # Optional LLM-generated summary attached to the row (level + text + provenance).
+        if "summary_json" not in existing_cols_pt:
+            conn.execute(
+                "ALTER TABLE podcast_transcripts ADD COLUMN summary_json TEXT"
+            )
 
 
 @contextmanager
@@ -593,16 +606,26 @@ def interview_attempt_detail(attempt_id: int) -> dict[str, Any] | None:
 # ---------------------------------------------------------------------------
 
 
-def insert_podcast_pending(spotify_url: str, spotify_episode_id: str) -> int:
+def insert_podcast_pending(
+    spotify_url: str,
+    spotify_episode_id: str,
+    source: str = "spotify",
+) -> int:
     """Create the row right after the user submits the URL. Returns the new id.
-    Raises sqlite3.IntegrityError if the URL is already in the bank."""
+
+    ``source`` distinguishes Spotify episodes from YouTube videos. The
+    ``spotify_url`` / ``spotify_episode_id`` columns hold the (URL, id) pair
+    regardless of source — the column names are kept for back-compat.
+
+    Raises sqlite3.IntegrityError if the URL is already in the bank.
+    """
     now = datetime.utcnow().isoformat()
     with get_conn() as conn:
         cur = conn.execute(
             "INSERT INTO podcast_transcripts "
-            "(spotify_url, spotify_episode_id, show_name, episode_title, "
-            "status, created_at) VALUES (?,?,?,?,?,?)",
-            (spotify_url, spotify_episode_id, "", "", "pending", now),
+            "(spotify_url, spotify_episode_id, source, show_name, episode_title, "
+            "status, created_at) VALUES (?,?,?,?,?,?,?)",
+            (spotify_url, spotify_episode_id, source, "", "", "pending", now),
         )
         return int(cur.lastrowid)
 
@@ -668,11 +691,36 @@ def finalize_podcast_transcript(
 def list_podcast_transcripts() -> list[dict[str, Any]]:
     with get_conn() as conn:
         cur = conn.execute(
-            "SELECT id, spotify_url, spotify_episode_id, show_name, episode_title, "
-            "published_at, duration_sec, language, model_used, status, error, created_at "
+            "SELECT id, spotify_url, spotify_episode_id, source, show_name, episode_title, "
+            "published_at, duration_sec, language, model_used, status, error, created_at, "
+            "(summary_json IS NOT NULL) AS has_summary "
             "FROM podcast_transcripts ORDER BY id DESC"
         )
         return [dict(r) for r in cur.fetchall()]
+
+
+def set_podcast_summary(
+    row_id: int,
+    level: str,
+    text: str,
+    source: str,
+) -> None:
+    """Attach an LLM-generated summary to a podcast row.
+
+    ``source`` is either ``"captions"`` (YouTube captions path) or
+    ``"transcript"`` (summarized from the final cleaned transcript).
+    """
+    payload = {
+        "level": level,
+        "text": text,
+        "source": source,
+        "generated_at": datetime.utcnow().isoformat(),
+    }
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE podcast_transcripts SET summary_json = ? WHERE id = ?",
+            (json.dumps(payload, ensure_ascii=False), row_id),
+        )
 
 
 def get_podcast_transcript(row_id: int) -> dict[str, Any] | None:
@@ -688,6 +736,14 @@ def get_podcast_transcript(row_id: int) -> dict[str, Any] | None:
             d["segments"] = json.loads(d.pop("segments_json") or "[]")
         except (TypeError, json.JSONDecodeError):
             d["segments"] = []
+        raw_summary = d.pop("summary_json", None)
+        if raw_summary:
+            try:
+                d["summary"] = json.loads(raw_summary)
+            except (TypeError, json.JSONDecodeError):
+                d["summary"] = None
+        else:
+            d["summary"] = None
         return d
 
 

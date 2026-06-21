@@ -29,19 +29,26 @@ from alice_server import (
     rag,
     spotify_client,
     store,
+    summarizer,
     transcription,
+    transcription_groq,
     transcript_cleanup,
+    youtube_client,
 )
 from alice_server.config import (
     OLLAMA_HOST,
     OLLAMA_MODEL,
     SUBJECTS_ROOT,
+    get_deepgram_api_key,
+    get_groq_api_key,
     get_ollama_host,
     get_ollama_model,
     get_podcast_index_creds,
     get_spotify_creds,
+    get_transcription_provider,
     set_ollama_runtime,
     set_podcast_runtime,
+    set_transcription_runtime,
 )
 from alice_server.extract import extract_file
 from alice_server import github_import
@@ -1350,82 +1357,202 @@ async def _download_audio(
                             progress_cb(min(1.0, written / total))
 
 
-async def _process_podcast(row_id: int, spotify_url: str) -> None:
+async def _process_podcast(
+    row_id: int,
+    source_url: str,
+    source: str = "spotify",
+    mode: str = "transcript",
+    summary_level: str = "moyen",
+) -> None:
+    """Resolve → fetch segments → optionally summarize.
+
+    Two paths produce segments:
+      * YouTube + summary mode → try captions; if found, skip audio entirely.
+      * Otherwise (Spotify, or YT without captions, or transcript mode) → the
+        full audio pipeline (download → transcribe → cleanup).
+
+    When ``mode == "summary"``, a final LLM pass over the segments produces the
+    summary which is stored in ``summary_json``. The transcript itself is always
+    stored in ``segments_json``.
+    """
     audio_path: Path | None = None
     tmpdir: tempfile.TemporaryDirectory | None = None
+    enclosure: str = ""
+    yt_lang: str | None = None
     _job_state(row_id)["started_at"] = time.time()
     try:
-        _set_job(row_id, "resolving", "Résolution Spotify + Podcast Index…")
-        store.update_podcast_status(row_id, "resolving")
+        # ── 1) Resolve metadata ────────────────────────────────────────────
+        if source == "youtube":
+            _set_job(row_id, "resolving", "Récupération métadonnées YouTube…")
+            store.update_podcast_status(row_id, "resolving")
+            yt_meta = await youtube_client.get_metadata(source_url)
+            if not yt_meta.get("video_id"):
+                raise RuntimeError("Vidéo YouTube introuvable.")
 
-        episode_id = spotify_client.extract_episode_id(spotify_url)
-        sp_meta = await spotify_client.get_episode(episode_id)
-        pi_ep = await podcast_index.resolve_spotify_episode(sp_meta)
-        if not pi_ep:
-            raise RuntimeError(
-                "Épisode introuvable dans Podcast Index (probable exclusivité Spotify)."
-            )
-        enclosure = pi_ep.get("enclosureUrl") or ""
-        if not enclosure:
-            raise RuntimeError("Aucune URL audio (enclosure) trouvée dans le flux RSS.")
-
-        store.update_podcast_metadata(
-            row_id,
-            show_name=sp_meta.get("show_name", ""),
-            episode_title=sp_meta.get("name", ""),
-            published_at=sp_meta.get("release_date") or None,
-            duration_sec=int(sp_meta.get("duration_ms", 0) / 1000) or None,
-            audio_url=enclosure,
-        )
-
-        _set_job(row_id, "downloading", "Téléchargement de l'audio…", progress=0.0)
-        store.update_podcast_status(row_id, "downloading")
-        tmpdir = tempfile.TemporaryDirectory(prefix="alice_pod_")
-        audio_path = Path(tmpdir.name) / "audio.mp3"
-
-        def _on_dl(p: float) -> None:
-            _set_job_progress(row_id, p)
-
-        await _download_audio(enclosure, audio_path, progress_cb=_on_dl)
-
-        _set_job(row_id, "transcribing", "Transcription faster-whisper…", progress=0.0)
-        store.update_podcast_status(row_id, "transcribing")
-
-        def _on_tr(p: float) -> None:
-            _set_job_progress(row_id, p)
-
-        result = await transcription.transcribe(
-            audio_path, language=None, progress_cb=_on_tr
-        )
-
-        # Free Whisper VRAM so Ollama can run the cleanup pass on full GPU.
-        transcription.unload_model()
-
-        _set_job(row_id, "cleaning", "Nettoyage du transcript (dedup + LLM)…", progress=0.0)
-        store.update_podcast_status(row_id, "cleaning")
-
-        def _on_chunk_done(done: int, total: int) -> None:
-            frac = (done / total) if total else None
-            _set_job(
+            episode_duration_sec = yt_meta.get("duration_sec")
+            yt_lang = yt_meta.get("language")
+            store.update_podcast_metadata(
                 row_id,
-                "cleaning",
-                f"Nettoyage LLM : chunk {done}/{total}",
-                progress=frac,
+                show_name=yt_meta.get("channel", ""),
+                episode_title=yt_meta.get("title", ""),
+                published_at=yt_meta.get("release_date"),
+                duration_sec=episode_duration_sec,
+                audio_url=yt_meta.get("webpage_url", source_url),
+                language=yt_lang,
+            )
+        else:
+            _set_job(row_id, "resolving", "Résolution Spotify + Podcast Index…")
+            store.update_podcast_status(row_id, "resolving")
+
+            episode_id = spotify_client.extract_episode_id(source_url)
+            sp_meta = await spotify_client.get_episode(episode_id)
+            pi_ep = await podcast_index.resolve_spotify_episode(sp_meta)
+            if not pi_ep:
+                raise RuntimeError(
+                    "Épisode introuvable dans Podcast Index (probable exclusivité Spotify)."
+                )
+            enclosure = pi_ep.get("enclosureUrl") or ""
+            if not enclosure:
+                raise RuntimeError(
+                    "Aucune URL audio (enclosure) trouvée dans le flux RSS."
+                )
+
+            episode_duration_sec = int(sp_meta.get("duration_ms", 0) / 1000) or None
+            store.update_podcast_metadata(
+                row_id,
+                show_name=sp_meta.get("show_name", ""),
+                episode_title=sp_meta.get("name", ""),
+                published_at=sp_meta.get("release_date") or None,
+                duration_sec=episode_duration_sec,
+                audio_url=enclosure,
             )
 
-        cleaned_segments = await transcript_cleanup.clean_transcript(
-            result["segments"],
-            language=result.get("language"),
-            progress_cb=_on_chunk_done,
-        )
+        # ── 2) Get segments — captions shortcut for YT summary mode ───────
+        final_segments: list[dict[str, Any]] | None = None
+        final_language: str | None = None
+        final_model: str | None = None
+        summary_source = "transcript"  # default; set to "captions" when shortcut hits
 
+        if source == "youtube" and mode == "summary":
+            _set_job(row_id, "resolving", "Recherche des captions YouTube…")
+            try:
+                cap_lang, cap_segs = await youtube_client.fetch_captions(
+                    source_url, prefer_lang=yt_lang
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("YT captions fetch failed: %s — falling back to audio", exc)
+                cap_lang, cap_segs = None, []
+
+            if cap_segs:
+                _set_job(row_id, "cleaning", "Dedup des captions…", progress=0.0)
+                store.update_podcast_status(row_id, "cleaning")
+                final_segments = transcript_cleanup.dedupe_segments(cap_segs)
+                final_language = cap_lang or yt_lang or "en"
+                final_model = "youtube-captions"
+                summary_source = "captions"
+
+        # ── 3) Full audio pipeline (when no captions shortcut) ────────────
+        if final_segments is None:
+            # Hard cap on Groq Cloud: free-tier ASPH bucket is 7200s = 2h.
+            if (
+                get_transcription_provider() == "groq"
+                and episode_duration_sec is not None
+                and episode_duration_sec > transcription_groq.MAX_AUDIO_DURATION_S
+            ):
+                cap_min = transcription_groq.MAX_AUDIO_DURATION_S // 60
+                ep_min = episode_duration_sec // 60
+                raise RuntimeError(
+                    f"Contenu trop long pour Groq Cloud free tier "
+                    f"({ep_min} min > {cap_min} min). Bascule sur Local GPU "
+                    "ou upgrade ton compte Groq (Dev tier)."
+                )
+
+            _set_job(row_id, "downloading", "Téléchargement de l'audio…", progress=0.0)
+            store.update_podcast_status(row_id, "downloading")
+            tmpdir = tempfile.TemporaryDirectory(prefix="alice_pod_")
+            audio_path = Path(tmpdir.name) / "audio.mp3"
+
+            def _on_dl(p: float) -> None:
+                _set_job_progress(row_id, p)
+
+            if source == "youtube":
+                await youtube_client.download_audio(
+                    source_url, audio_path, progress_cb=_on_dl
+                )
+            else:
+                await _download_audio(enclosure, audio_path, progress_cb=_on_dl)
+
+            _set_job(row_id, "transcribing", "Transcription…", progress=0.0)
+            store.update_podcast_status(row_id, "transcribing")
+
+            def _on_tr(p: float) -> None:
+                _set_job_progress(row_id, p)
+
+            result = await transcription.transcribe(
+                audio_path, language=None, progress_cb=_on_tr
+            )
+
+            transcription.unload_model()
+
+            _set_job(row_id, "cleaning", "Nettoyage du transcript (dedup + LLM)…", progress=0.0)
+            store.update_podcast_status(row_id, "cleaning")
+
+            def _on_chunk_done(done: int, total: int) -> None:
+                frac = (done / total) if total else None
+                _set_job(
+                    row_id,
+                    "cleaning",
+                    f"Nettoyage LLM : chunk {done}/{total}",
+                    progress=frac,
+                )
+
+            final_segments = await transcript_cleanup.clean_transcript(
+                result["segments"],
+                language=result.get("language"),
+                progress_cb=_on_chunk_done,
+            )
+            final_language = result["language"]
+            final_model = result["model_used"]
+
+        # ── 4) Persist transcript ─────────────────────────────────────────
         store.finalize_podcast_transcript(
             row_id,
-            language=result["language"],
-            segments=cleaned_segments,
-            model_used=result["model_used"],
+            language=final_language or "en",
+            segments=final_segments,
+            model_used=final_model or "",
         )
-        _set_job(row_id, "done", "Transcript prêt.")
+
+        # ── 5) Optional summary ───────────────────────────────────────────
+        if mode == "summary":
+            _set_job(
+                row_id,
+                "summarizing",
+                f"Résumé ({summary_level})…",
+                progress=0.0,
+            )
+            store.update_podcast_status(row_id, "summarizing")
+
+            def _on_summary_progress(p: float) -> None:
+                _set_job_progress(row_id, p)
+
+            summary_text = await summarizer.summarize(
+                final_segments,
+                level=summary_level,
+                language=final_language,
+                progress_cb=_on_summary_progress,
+            )
+            store.set_podcast_summary(
+                row_id,
+                level=summary_level,
+                text=summary_text,
+                source=summary_source,
+            )
+            # finalize_podcast_transcript already set status to "done" earlier,
+            # but the "summarizing" transition overrode it. Reset to done now.
+            store.update_podcast_status(row_id, "done")
+            _set_job(row_id, "done", "Résumé prêt.")
+        else:
+            _set_job(row_id, "done", "Transcript prêt.")
     except Exception as exc:  # noqa: BLE001
         msg = str(exc) or exc.__class__.__name__
         store.update_podcast_status(row_id, "error", error=msg)
@@ -1436,51 +1563,113 @@ async def _process_podcast(row_id: int, spotify_url: str) -> None:
 
 
 class PodcastFetchBody(BaseModel):
+    # Kept named `spotify_url` for back-compat — the frontend can pass any
+    # supported URL (Spotify episode or YouTube video).
     spotify_url: str
+    mode: str = "transcript"  # "transcript" | "summary"
+    summary_level: str = "moyen"  # "court" | "moyen" | "long"
 
 
 @app.post("/api/podcasts/fetch")
 async def podcasts_fetch(body: PodcastFetchBody) -> dict[str, Any]:
     url = body.spotify_url.strip()
     if not url:
-        raise HTTPException(422, "URL Spotify requise.")
-    try:
-        episode_id = spotify_client.extract_episode_id(url)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
+        raise HTTPException(422, "URL requise.")
+    mode = (body.mode or "transcript").strip().lower()
+    if mode not in {"transcript", "summary"}:
+        raise HTTPException(422, f"Mode invalide : {body.mode!r}")
+    summary_level = (body.summary_level or "moyen").strip().lower()
+    if summary_level not in summarizer.SUMMARY_LEVELS:
+        raise HTTPException(422, f"Niveau de résumé invalide : {body.summary_level!r}")
 
-    pi_key, pi_secret = get_podcast_index_creds()
-    sp_id, sp_secret = get_spotify_creds()
-    if not (pi_key and pi_secret):
-        raise HTTPException(422, "Credentials Podcast Index manquants (Settings).")
-    if not (sp_id and sp_secret):
-        raise HTTPException(422, "Credentials Spotify manquants (Settings).")
+    is_youtube = youtube_client.is_youtube_url(url)
+    if is_youtube:
+        try:
+            source_id = youtube_client.extract_video_id(url)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        source = "youtube"
+    else:
+        try:
+            source_id = spotify_client.extract_episode_id(url)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        source = "spotify"
+        pi_key, pi_secret = get_podcast_index_creds()
+        sp_id, sp_secret = get_spotify_creds()
+        if not (pi_key and pi_secret):
+            raise HTTPException(422, "Credentials Podcast Index manquants (Settings).")
+        if not (sp_id and sp_secret):
+            raise HTTPException(422, "Credentials Spotify manquants (Settings).")
 
     try:
-        row_id = store.insert_podcast_pending(url, episode_id)
+        row_id = store.insert_podcast_pending(url, source_id, source=source)
     except sqlite3.IntegrityError:
-        raise HTTPException(409, "Ce podcast est déjà dans la bibliothèque.")
+        raise HTTPException(409, "Ce contenu est déjà dans la bibliothèque.")
 
-    # Best-effort: fetch Spotify metadata synchronously so the card displays
-    # title/show/date/duration immediately. Background task re-fetches and
-    # fills audio_url after Podcast Index resolution.
+    # Best-effort: fetch metadata synchronously so the card displays
+    # title/show/date/duration immediately. Background task re-fetches what
+    # it needs (e.g. Podcast Index enclosure for Spotify).
     try:
-        sp_meta = await spotify_client.get_episode(episode_id)
-        sp_lang = (sp_meta.get("language") or "").split("-")[0].lower() or None
-        store.update_podcast_metadata(
-            row_id,
-            show_name=sp_meta.get("show_name", ""),
-            episode_title=sp_meta.get("name", ""),
-            published_at=sp_meta.get("release_date") or None,
-            duration_sec=int(sp_meta.get("duration_ms", 0) / 1000) or None,
-            audio_url=None,
-            language=sp_lang,
-        )
+        if is_youtube:
+            yt_meta = await youtube_client.get_metadata(url)
+            store.update_podcast_metadata(
+                row_id,
+                show_name=yt_meta.get("channel", ""),
+                episode_title=yt_meta.get("title", ""),
+                published_at=yt_meta.get("release_date"),
+                duration_sec=yt_meta.get("duration_sec"),
+                audio_url=None,
+                language=yt_meta.get("language"),
+            )
+        else:
+            sp_meta = await spotify_client.get_episode(source_id)
+            sp_lang = (sp_meta.get("language") or "").split("-")[0].lower() or None
+            store.update_podcast_metadata(
+                row_id,
+                show_name=sp_meta.get("show_name", ""),
+                episode_title=sp_meta.get("name", ""),
+                published_at=sp_meta.get("release_date") or None,
+                duration_sec=int(sp_meta.get("duration_ms", 0) / 1000) or None,
+                audio_url=None,
+                language=sp_lang,
+            )
     except Exception:  # noqa: BLE001
         pass
 
-    asyncio.create_task(_process_podcast(row_id, url))
-    return {"id": row_id, "status": "pending"}
+    asyncio.create_task(
+        _process_podcast(row_id, url, source, mode=mode, summary_level=summary_level)
+    )
+    return {
+        "id": row_id,
+        "status": "pending",
+        "source": source,
+        "mode": mode,
+        "summary_level": summary_level if mode == "summary" else None,
+    }
+
+
+class SummaryRegenBody(BaseModel):
+    level: str = "moyen"
+
+
+@app.post("/api/podcasts/{row_id}/summary")
+async def podcast_regen_summary(row_id: int, body: SummaryRegenBody) -> dict[str, Any]:
+    level = (body.level or "moyen").strip().lower()
+    if level not in summarizer.SUMMARY_LEVELS:
+        raise HTTPException(422, f"Niveau invalide : {body.level!r}")
+    detail = store.get_podcast_transcript(row_id)
+    if not detail:
+        raise HTTPException(404, "Contenu introuvable.")
+    segments = detail.get("segments") or []
+    if not segments:
+        raise HTTPException(422, "Pas de transcript disponible pour ce contenu.")
+    language = detail.get("language")
+    existing = detail.get("summary") or {}
+    summary_source = existing.get("source") or "transcript"
+    text = await summarizer.summarize(segments, level=level, language=language)
+    store.set_podcast_summary(row_id, level=level, text=text, source=summary_source)
+    return {"level": level, "text": text, "source": summary_source}
 
 
 @app.get("/api/podcasts/list")
@@ -1538,12 +1727,26 @@ def podcasts_delete(row_id: int) -> dict[str, bool]:
 
 @app.get("/api/podcasts/transcription/info")
 def podcasts_transcription_info() -> dict[str, Any]:
-    """Probe GPU + return the model that will be used."""
+    """Probe backend + return the model that will be used.
+
+    For Groq we also report whether an API key is configured so the UI can warn
+    the user before they submit an episode.
+    """
+    provider = get_transcription_provider()
     try:
         cfg = transcription.get_config()
-        return {"available": True, **cfg}
     except RuntimeError as exc:
-        return {"available": False, "error": str(exc)}
+        return {
+            "available": False,
+            "provider": provider,
+            "error": str(exc),
+        }
+    extras: dict[str, Any] = {"provider": provider}
+    if cfg.get("backend") == "groq":
+        extras["key_configured"] = bool(get_groq_api_key())
+    elif cfg.get("backend") == "deepgram":
+        extras["key_configured"] = bool(get_deepgram_api_key())
+    return {"available": True, **cfg, **extras}
 
 
 class PodcastSettingsBody(BaseModel):
@@ -1577,3 +1780,35 @@ def podcasts_settings_post(body: PodcastSettingsBody) -> dict[str, bool]:
         "podcast_index_configured": bool(pi_key and pi_secret),
         "spotify_configured": bool(sp_id and sp_secret),
     }
+
+
+class TranscriptionSettingsBody(BaseModel):
+    provider: str | None = None  # "local" | "groq" | "deepgram"
+    groq_api_key: str | None = None
+    deepgram_api_key: str | None = None
+
+
+def _transcription_settings_payload() -> dict[str, Any]:
+    return {
+        "provider": get_transcription_provider(),
+        "groq_key_configured": bool(get_groq_api_key()),
+        "deepgram_key_configured": bool(get_deepgram_api_key()),
+    }
+
+
+@app.get("/api/settings/transcription")
+def transcription_settings_get() -> dict[str, Any]:
+    return _transcription_settings_payload()
+
+
+@app.post("/api/settings/transcription")
+def transcription_settings_post(body: TranscriptionSettingsBody) -> dict[str, Any]:
+    set_transcription_runtime(
+        provider=body.provider,
+        groq_api_key=body.groq_api_key,
+        deepgram_api_key=body.deepgram_api_key,
+    )
+    # Backend choice changed — drop the cached config/model so the next
+    # transcribe call re-probes (e.g. CUDA→Groq without restart).
+    transcription.reset_config_cache()
+    return _transcription_settings_payload()
