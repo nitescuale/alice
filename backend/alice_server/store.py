@@ -519,6 +519,55 @@ def update_bank_answers(updates: list[tuple[int, str]]) -> int:
     return len(updates)
 
 
+def list_interview_questions(
+    topic: str | None = None,
+    search: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Browse questions (lightweight — no reference answer).
+
+    Returns {"items": [{id, topic, topic_label, idx, question, question_en}],
+    "total": N} where total ignores limit/offset (for pagination).
+    """
+    where: list[str] = []
+    params: list[Any] = []
+    if topic:
+        where.append("topic = ?")
+        params.append(topic)
+    if search and search.strip():
+        where.append("(question LIKE ? OR question_en LIKE ?)")
+        like = f"%{search.strip()}%"
+        params.extend([like, like])
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    with get_conn() as conn:
+        total = int(
+            conn.execute(
+                f"SELECT COUNT(*) AS n FROM interview_bank{clause}", params
+            ).fetchone()["n"]
+        )
+        cur = conn.execute(
+            "SELECT id, topic, topic_label, idx, question, question_en "
+            f"FROM interview_bank{clause} ORDER BY topic_label ASC, idx ASC "
+            "LIMIT ? OFFSET ?",
+            [*params, limit, offset],
+        )
+        items = [dict(r) for r in cur.fetchall()]
+    return {"items": items, "total": total}
+
+
+def get_interview_question(qid: int) -> dict[str, Any] | None:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT id, topic, topic_label, source_path, idx, "
+            "question, question_en, reference_answer, reference_answer_en "
+            "FROM interview_bank WHERE id = ?",
+            (qid,),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
 def random_interview_question(topic: str | None = None) -> dict[str, Any] | None:
     with get_conn() as conn:
         if topic:

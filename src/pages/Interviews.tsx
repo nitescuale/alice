@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -17,12 +17,15 @@ import {
   BookOpen,
   ArrowUp,
   Languages,
+  List,
+  Search,
 } from "lucide-react";
 import { api } from "../api";
 import { Card, CardHeader } from "../components/Card";
 import { Button } from "../components/Button";
 import { Badge } from "../components/Badge";
 import { Select } from "../components/Select";
+import { Input } from "../components/Input";
 
 interface Topic {
   slug: string;
@@ -57,6 +60,15 @@ interface BankQuestion {
   reference_answer_en: string;
 }
 
+interface BrowseItem {
+  id: number;
+  topic: string;
+  topic_label: string;
+  idx: number;
+  question: string;
+  question_en: string;
+}
+
 interface Evaluation {
   score: number | null;
   verdict: string;
@@ -82,6 +94,13 @@ const mdInline = (src: string) => (
   </Markdown>
 );
 
+// First paragraph of a stored question (drops the attachment block), trimmed
+// for a one-line browse-list preview.
+const qPreview = (s: string) => {
+  const head = (s.split("\n\n")[0] || "").replace(/\s+/g, " ").trim();
+  return head.length > 160 ? head.slice(0, 160) + "…" : head;
+};
+
 export function Interviews() {
   const [bankStatus, setBankStatus] = useState<BankStatus | null>(null);
   const [topic, setTopic] = useState<string>("");
@@ -98,6 +117,14 @@ export function Interviews() {
   const [loadingGrade, setLoadingGrade] = useState(false);
   const [importing, setImporting] = useState(false);
   const [err, setErr] = useState<string>("");
+
+  // Browse-and-pick a specific question (alongside random).
+  const [browseOpen, setBrowseOpen] = useState(false);
+  const [browseItems, setBrowseItems] = useState<BrowseItem[]>([]);
+  const [browseTotal, setBrowseTotal] = useState(0);
+  const [browseSearch, setBrowseSearch] = useState("");
+  const [loadingBrowse, setLoadingBrowse] = useState(false);
+  const browseReq = useRef(0);
 
   const fetchStatus = useCallback(async () => {
     setLoadingBank(true);
@@ -170,6 +197,45 @@ export function Interviews() {
       setQuestion(q);
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : "Impossible de tirer une question");
+    } finally {
+      setLoadingQ(false);
+    }
+  };
+
+  // Load the browse list when the panel is open (debounced; topic/search aware).
+  useEffect(() => {
+    if (!browseOpen) return;
+    const myReq = ++browseReq.current;
+    const id = setTimeout(() => {
+      setLoadingBrowse(true);
+      const params = new URLSearchParams();
+      if (topic) params.set("topic", topic);
+      if (browseSearch.trim()) params.set("q", browseSearch.trim());
+      params.set("limit", "150");
+      api<{ items: BrowseItem[]; total: number }>(
+        `/api/interview/questions?${params.toString()}`,
+      )
+        .then((r) => {
+          if (browseReq.current !== myReq) return;
+          setBrowseItems(r.items);
+          setBrowseTotal(r.total);
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (browseReq.current === myReq) setLoadingBrowse(false);
+        });
+    }, 250);
+    return () => clearTimeout(id);
+  }, [browseOpen, topic, browseSearch]);
+
+  const pickQuestion = async (id: number) => {
+    setLoadingQ(true);
+    resetQuestionState();
+    try {
+      const q = await api<BankQuestion>(`/api/interview/question/${id}`);
+      setQuestion(q);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : "Impossible de charger la question");
     } finally {
       setLoadingQ(false);
     }
@@ -316,6 +382,13 @@ export function Interviews() {
               {loadingQ ? "Tirage…" : "Nouvelle question"}
             </Button>
             <Button
+              variant={browseOpen ? "primary" : "secondary"}
+              icon={<List size={16} />}
+              onClick={() => setBrowseOpen((v) => !v)}
+            >
+              Parcourir
+            </Button>
+            <Button
               variant="ghost"
               size="sm"
               icon={
@@ -354,6 +427,73 @@ export function Interviews() {
                 </span>
               </>
             ) : null}
+          </div>
+        </Card>
+      )}
+
+      {!bankEmpty && browseOpen && (
+        <Card variant="default" padding="md" style={{ marginBottom: "var(--sp-5)" }}>
+          <div style={{ marginBottom: "var(--sp-3)" }}>
+            <Input
+              label="Rechercher une question"
+              icon={<Search size={14} />}
+              placeholder="Mot-clé dans la question…"
+              value={browseSearch}
+              onChange={(e) => setBrowseSearch(e.target.value)}
+            />
+          </div>
+          <div
+            style={{
+              fontSize: "var(--text-xs)",
+              color: "var(--noir-400)",
+              marginBottom: "var(--sp-2)",
+            }}
+          >
+            {loadingBrowse
+              ? "Chargement…"
+              : `${browseTotal} question${browseTotal > 1 ? "s" : ""}`}
+            {!loadingBrowse && browseTotal > browseItems.length
+              ? ` · ${browseItems.length} affichées`
+              : ""}
+          </div>
+          <div
+            style={{
+              maxHeight: 360,
+              overflowY: "auto",
+              display: "flex",
+              flexDirection: "column",
+              gap: 2,
+            }}
+          >
+            {browseItems.map((it) => {
+              const txt = lang === "en" && it.question_en ? it.question_en : it.question;
+              const active = question?.id === it.id;
+              return (
+                <button
+                  key={it.id}
+                  type="button"
+                  onClick={() => pickQuestion(it.id)}
+                  className="browse-row"
+                  data-active={active ? "true" : undefined}
+                >
+                  <Badge variant={active ? "amber" : "default"} size="sm">
+                    Q{it.idx}
+                  </Badge>
+                  <span className="browse-row__text">{qPreview(txt)}</span>
+                </button>
+              );
+            })}
+            {!loadingBrowse && browseItems.length === 0 && (
+              <div
+                style={{
+                  fontSize: "var(--text-sm)",
+                  color: "var(--noir-400)",
+                  padding: "var(--sp-3)",
+                }}
+              >
+                Aucune question ne correspond.
+              </div>
+            )}
           </div>
         </Card>
       )}

@@ -738,6 +738,40 @@
   color: var(--amber-500);
 }
 
+/* ── Browse questions list ─────────────────────────── */
+.browse-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md);
+  padding: var(--sp-2) var(--sp-3);
+  cursor: pointer;
+  color: var(--noir-100);
+  font-family: var(--font-body);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.browse-row:hover {
+  background: var(--noir-800);
+}
+
+.browse-row[data-active="true"] {
+  background: var(--amber-100);
+}
+
+.browse-row__text {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ── Dashboard page ────────────────────────────────── */
 .dashboard-grid {
   display: grid;

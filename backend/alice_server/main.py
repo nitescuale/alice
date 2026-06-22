@@ -1177,6 +1177,30 @@ def interview_question_random(topic: str | None = None) -> dict[str, Any]:
     return q
 
 
+@app.get("/api/interview/questions")
+def interview_questions(
+    topic: str | None = None,
+    q: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """List questions for browsing (lightweight, filterable, paginated)."""
+    return store.list_interview_questions(
+        topic=topic,
+        search=q,
+        limit=max(1, min(limit, 200)),
+        offset=max(0, offset),
+    )
+
+
+@app.get("/api/interview/question/{qid}")
+def interview_question_by_id(qid: int) -> dict[str, Any]:
+    q = store.get_interview_question(qid)
+    if not q:
+        raise HTTPException(status_code=404, detail="Question introuvable.")
+    return q
+
+
 class InterviewHintBody(BaseModel):
     question: str
     reference_answer: str
